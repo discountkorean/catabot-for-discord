@@ -746,6 +746,56 @@ class RestockCog(commands.Cog):
         domain = _display_domain(discovered.split("/")[2])
         await interaction.followup.send(f"✅ Added **{store_name}**\n🔗 `https://{domain}`")
 
+    @admin.command(name="export", description="Export this server's store list as a shareable code")
+    async def admin_export(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        gs     = self._guild(interaction.guild_id)
+        stores = gs.get("stores", {})
+
+        if not stores:
+            await interaction.followup.send("❌ No stores to export.", ephemeral=True)
+            return
+
+        import base64
+        code = base64.urlsafe_b64encode(json.dumps(stores).encode()).decode()
+        store_list = "\n".join(f"• {name}" for name in stores)
+        embed = discord.Embed(
+            title="📤 Store Export Code",
+            description=f"Use `/rst admin import [code]` on another server to clone these stores.\n\n**{len(stores)} store(s):**\n{store_list}",
+            color=0x5865F2,
+            timestamp=datetime.now(ZoneInfo("UTC")),
+        )
+        embed.add_field(name="Code", value=f"```{code}```", inline=False)
+        embed.set_footer(text=bot_footer())
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @admin.command(name="import", description="Import a store list from an export code")
+    @app_commands.describe(code="Export code from /rst admin export")
+    async def admin_import(self, interaction: discord.Interaction, code: str):
+        await interaction.response.defer(ephemeral=True)
+
+        import base64
+        try:
+            stores = json.loads(base64.urlsafe_b64decode(code.encode()).decode())
+            if not isinstance(stores, dict):
+                raise ValueError
+        except Exception:
+            await interaction.followup.send("❌ Invalid code.", ephemeral=True)
+            return
+
+        gs = self._guild(interaction.guild_id)
+        existing  = gs.get("stores", {})
+        added     = {k: v for k, v in stores.items() if k not in existing}
+        skipped   = [k for k in stores if k in existing]
+
+        gs["stores"].update(added)
+        self.persist(interaction.guild_id)
+
+        lines = []
+        if added:   lines.append(f"✅ Imported {len(added)} store(s): " + ", ".join(f"**{n}**" for n in added))
+        if skipped: lines.append(f"⏭️ Skipped {len(skipped)} already present: " + ", ".join(f"**{n}**" for n in skipped))
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
+
     @admin.command(name="remove", description="Remove one or more stores from monitoring")
     @app_commands.describe(
         store1="Store to remove", store2="Additional store", store3="Additional store",

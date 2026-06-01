@@ -521,7 +521,7 @@ class RestockCog(commands.Cog):
         embed.add_field(name="State",    value="🟢 Running" if running else "🔴 Stopped",  inline=True)
         embed.add_field(name="Interval", value=f"{interval}s ({interval // 60}m)",         inline=True)
         embed.add_field(name="Channel",  value=channel.mention if channel else "Not set",  inline=True)
-        embed.add_field(name="Stores",   value="\n".join(f"• {n}" for n in stores),                   inline=False)
+        embed.add_field(name="Stores",   value="\n".join(f"• {n}" for n in stores) or "None — use `/rst admin add`", inline=False)
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed)
 
@@ -647,10 +647,10 @@ class RestockCog(commands.Cog):
             self.poll.start()
 
         stores     = self._guild_stores(interaction.guild_id)
-        store_list = "\n".join(f"• {name}" for name in stores)
+        store_list = "\n".join(f"• {name}" for name in stores) or "No stores added yet — use `/rst admin add`"
         embed = discord.Embed(
             title="🟢 Tracker Started",
-            description=f"Alerts → {alert_channel.mention}\n\nMonitoring **{len(stores)}** stores:\n{store_list}",
+            description=f"Alerts → {alert_channel.mention}\n\n**{len(stores)}** store(s) monitored:\n{store_list}",
             color=0x5865F2,
             timestamp=datetime.now(ZoneInfo("UTC")),
         )
@@ -700,20 +700,21 @@ class RestockCog(commands.Cog):
         await interaction.response.defer()
         gs = self._guild(interaction.guild_id)
 
-        await interaction.followup.send(f"🔍 Checking **{store_name}**...")
+        await interaction.followup.send(f"🔍 Checking **{store_name}**...", ephemeral=True)
 
         discovered = await discover_shopify_url(url)
         if not discovered:
-            await interaction.channel.send(
+            await interaction.followup.send(
                 f"❌ Could not find a Shopify storefront at **{url}**.\n"
-                f"The store may be password-protected, not on Shopify, or currently down."
+                f"The store may be password-protected, not on Shopify, or currently down.",
+                ephemeral=True,
             )
             return
 
         gs["stores"][store_name] = discovered
         self.persist(interaction.guild_id)
         domain = _display_domain(discovered.split("/")[2])
-        await interaction.channel.send(f"✅ Added **{store_name}**\n🔗 `https://{domain}`")
+        await interaction.followup.send(f"✅ Added **{store_name}**\n🔗 `https://{domain}`")
 
     @admin.command(name="remove", description="Remove one or more stores from monitoring")
     @app_commands.describe(

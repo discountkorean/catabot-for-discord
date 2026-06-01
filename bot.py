@@ -36,18 +36,20 @@ log = logging.getLogger(__name__)
 
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
+# Suppress console windows when spawning git subprocesses on Windows
+_GIT_FLAGS = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+
+
+def _git(args: list, **kwargs):
+    return subprocess.run(args, creationflags=_GIT_FLAGS, capture_output=True, text=True, **kwargs)
+
 
 def _git_pull_data():
     """Pull latest data from private repo. Runs synchronously at startup."""
     if not os.path.isdir(os.path.join(DATA_DIR, ".git")):
         log.warning("data/ is not a git repo — skipping pull")
         return
-    result = subprocess.run(
-        ["git", "pull", "--ff-only"],
-        cwd=DATA_DIR,
-        capture_output=True,
-        text=True,
-    )
+    result = _git(["git", "pull", "--ff-only"], cwd=DATA_DIR)
     if result.returncode == 0:
         log.info(f"Data pull: {result.stdout.strip() or 'already up to date'}")
     else:
@@ -58,14 +60,14 @@ def _git_push_data():
     """Commit and push any changed data files. Runs in a thread."""
     if not os.path.isdir(os.path.join(DATA_DIR, ".git")):
         return
-    subprocess.run(["git", "add", "."],           cwd=DATA_DIR, capture_output=True)
-    result = subprocess.run(
+    _git(["git", "add", "."], cwd=DATA_DIR)
+    result = _git(
         ["git", "commit", "-m", f"auto-sync {datetime.now(ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S')} UTC"],
-        cwd=DATA_DIR, capture_output=True, text=True,
+        cwd=DATA_DIR,
     )
     if "nothing to commit" in result.stdout:
-        return  # No changes
-    push = subprocess.run(["git", "push"], cwd=DATA_DIR, capture_output=True, text=True)
+        return
+    push = _git(["git", "push"], cwd=DATA_DIR)
     if push.returncode == 0:
         log.info("Data synced to remote.")
     else:
@@ -241,7 +243,7 @@ async def cmd_restart(interaction: discord.Interaction):
 
     async def _do_restart():
         await asyncio.sleep(1)
-        subprocess.Popen([sys.executable] + sys.argv, cwd=BASE_DIR)
+        subprocess.Popen([sys.executable] + sys.argv, cwd=BASE_DIR, creationflags=_GIT_FLAGS)
         os._exit(0)
 
     asyncio.create_task(_do_restart())

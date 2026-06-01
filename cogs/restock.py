@@ -193,6 +193,52 @@ async def fetch_products(url: str) -> list:
     return await asyncio.to_thread(_fetch_products_sync, url)
 
 
+def _probe_shopify_sync(url: str) -> bool:
+    """Return True if the URL is a valid, reachable Shopify products.json endpoint."""
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        if r.status_code in (401, 403) or "password" in r.url:
+            return False
+        if not r.ok:
+            return False
+        data = r.json()
+        return isinstance(data, dict) and "products" in data
+    except Exception:
+        return False
+
+
+async def discover_shopify_url(raw: str) -> str | None:
+    """
+    Given a human-friendly URL, find the correct Shopify products.json endpoint.
+    Tries www. → secure. variants. Returns the working URL or None.
+    """
+    from urllib.parse import urlparse
+
+    if not raw.startswith("http"):
+        raw = "https://" + raw
+
+    domain = urlparse(raw).netloc or raw.split("/")[2]
+
+    # Build candidate URLs in priority order
+    candidates = [f"https://{domain}/products.json?limit=1000"]
+
+    if domain.startswith("www."):
+        bare = domain[4:]
+        candidates.append(f"https://secure.{bare}/products.json?limit=1000")
+    elif domain.startswith("secure."):
+        bare = domain[7:]
+        candidates.append(f"https://www.{bare}/products.json?limit=1000")
+    else:
+        candidates.append(f"https://www.{domain}/products.json?limit=1000")
+        candidates.append(f"https://secure.{domain}/products.json?limit=1000")
+
+    for url in candidates:
+        if await asyncio.to_thread(_probe_shopify_sync, url):
+            return url
+
+    return None
+
+
 def build_variant_map(products: list) -> dict:
     variants = {}
     for product in products:
@@ -561,9 +607,8 @@ class RestockCog(commands.Cog):
         alert_channel = channel or interaction.channel
         gs["alert_channel_id"] = alert_channel.id
 
-        # Seed config.toml stores into guild on first setup
-        if not gs.get("stores"):
-            gs["stores"] = dict(load_config()["stores"])
+        if "stores" not in gs:
+            gs["stores"] = {}
 
         self.persist(interaction.guild_id)
 
@@ -609,22 +654,26 @@ class RestockCog(commands.Cog):
             self.poll.change_interval(seconds=seconds)
         await interaction.followup.send(f"✅ Poll interval updated to **{seconds}s** ({seconds // 60}m {seconds % 60}s).")
 
-    @admin.command(name="add", description="Add a store to monitor")
-    @app_commands.describe(store_name="Display name for the store", url="Shopify products.json URL")
+    @admin.command(name="add", description="Add a Shopify store to monitor")
+    @app_commands.describe(store_name="Display name for the store", url="Store URL (e.g. https://www.houndarchives.com)")
     async def admin_add(self, interaction: discord.Interaction, store_name: str, url: str):
         await interaction.response.defer()
         gs = self._guild(interaction.guild_id)
 
-        # Ensure scheme is present
-        if not url.startswith("http://") and not url.startswith("https://"):
-            url = "https://" + url
+        await interaction.followup.send(f"🔍 Checking **{store_name}**...")
 
-        url = url.split("?")[0].rstrip("/") + "?limit=1000"
-        if not url.endswith("products.json?limit=1000"):
-            url = url.rstrip("/") + "/products.json?limit=1000"
-        gs["stores"][store_name] = url
+        discovered = await discover_shopify_url(url)
+        if not discovered:
+            await interaction.channel.send(
+                f"❌ Could not find a Shopify storefront at **{url}**.\n"
+                f"The store may be password-protected, not on Shopify, or currently down."
+            )
+            return
+
+        gs["stores"][store_name] = discovered
         self.persist(interaction.guild_id)
-        await interaction.followup.send(f"✅ Added **{store_name}**\n`{url}`")
+        domain = _display_domain(discovered.split("/")[2])
+        await interaction.channel.send(f"✅ Added **{store_name}**\n🔗 `https://{domain}`")
 
     @admin.command(name="remove", description="Remove one or more stores from monitoring")
     @app_commands.describe(
@@ -844,11 +893,10 @@ class RestockCog(commands.Cog):
 
             # Format A: flat single-guild (alert_channel_id at root)
             if legacy.get("alert_channel_id") and not self.guilds:
-                config_stores = load_config()["stores"]
-                extra         = legacy.get("extra_stores", {})
+                extra = legacy.get("extra_stores", {})
                 self.guilds[guild_id] = {
                     "alert_channel_id": legacy["alert_channel_id"],
-                    "stores":           {**config_stores, **extra},
+                    "stores":           extra,
                     "notifications":    legacy.get("notifications", {}),
                 }
                 self.persist(guild_id)
@@ -856,12 +904,11 @@ class RestockCog(commands.Cog):
 
             # Format B: guilds nested dict in bot_state.json
             elif "guilds" in legacy and not self.guilds:
-                config_stores = load_config()["stores"]
                 for gid, gs in legacy["guilds"].items():
-                    extra = gs.get("extra_stores", {})
+                    extra = gs.get("extra_stores", gs.get("stores", {}))
                     self.guilds[gid] = {
                         "alert_channel_id": gs.get("alert_channel_id"),
-                        "stores":           {**config_stores, **extra},
+                        "stores":           extra,
                         "notifications":    gs.get("notifications", {}),
                     }
                     self.persist(gid)

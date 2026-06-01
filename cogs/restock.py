@@ -294,11 +294,6 @@ class RestockCog(commands.Cog):
         if self.poll.seconds != self.poll_interval:
             self.poll.change_interval(seconds=self.poll_interval)
 
-        await channel.send(
-            f"🔄 Checking stores... (interval: {self.poll_interval}s)",
-            delete_after=self.poll_interval,
-        )
-
         stores = self.get_all_stores()
         for store_name, url in stores.items():
             log.info(f"Checking {store_name}...")

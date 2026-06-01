@@ -15,9 +15,14 @@ function Stop-Bot {
 }
 
 function Start-Bot {
-    $pythonw = (Get-Command pythonw -ErrorAction SilentlyContinue | Where-Object { $_.Source -notlike "*WindowsApps*" } | Select-Object -First 1).Source
-    if (-not $pythonw) { $pythonw = (Get-Command python -ErrorAction SilentlyContinue | Where-Object { $_.Source -notlike "*WindowsApps*" } | Select-Object -First 1).Source }
-    if (-not $pythonw) { throw "Could not find Python executable." }
+    $preferred = "C:\Users\Adam\AppData\Local\Python\pythoncore-3.14-64\pythonw.exe"
+    if (Test-Path $preferred) {
+        $pythonw = $preferred
+    } else {
+        $pythonw = where.exe pythonw 2>$null | Where-Object { $_ -notlike "*WindowsApps*" } | Select-Object -First 1
+        if (-not $pythonw) { $pythonw = where.exe python 2>$null | Where-Object { $_ -notlike "*WindowsApps*" } | Select-Object -First 1 }
+        if (-not $pythonw) { throw "Could not find Python executable." }
+    }
     $p = Start-Process $pythonw -ArgumentList "`"$botFile`"" -WorkingDirectory $dir -PassThru
     $p.Id | Out-File -Encoding ascii $pidFile
 }

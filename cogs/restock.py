@@ -71,9 +71,9 @@ class SearchPaginator(discord.ui.View):
         embed.add_field(name="Price", value=r.price,      inline=True)
         if r.available:
             lines = "\n".join(f"[{v['size']}]({v['cart_url']})" for v in r.available)
-            embed.add_field(name=f"✅ In Stock ({len(r.available)})", value=lines, inline=False)
+            embed.add_field(name=f"✅ In Stock ({len(r.available)})", value=lines or "—", inline=False)
         if r.unavailable:
-            sizes = ", ".join(v["size"] for v in r.unavailable)
+            sizes = ", ".join(v["size"] for v in r.unavailable) or "—"
             embed.add_field(name=f"❌ Out of Stock ({len(r.unavailable)})", value=sizes, inline=False)
         embed.set_footer(text=f"Result {self.page + 1} of {total}  •  {bot_footer()}")
         return embed
@@ -314,7 +314,7 @@ def make_new_item_embed(store_name: str, store_url: str, variants: list) -> disc
     )
     if first.get("image_url"):
         embed.set_thumbnail(url=first["image_url"])
-    embed.add_field(name="Sizes", value=size_lines,        inline=True)
+    embed.add_field(name="Sizes", value=size_lines or "N/A", inline=True)
     embed.add_field(name="Price", value=price,             inline=True)
     embed.add_field(name="Store", value=store_name,        inline=True)
     embed.add_field(name="Link",  value=_product_url(store_url, first["handle"]), inline=False)
@@ -611,7 +611,7 @@ class RestockCog(commands.Cog):
 
         if subscribed:
             lines = [f"[{n}](https://{_display_domain(stores[n].split('/')[2])})" for n in subscribed if n in stores]
-            embed.add_field(name=f"🔔 Subscribed Stores ({len(subscribed)})", value="\n".join(lines), inline=False)
+            embed.add_field(name=f"🔔 Subscribed Stores ({len(subscribed)})", value="\n".join(lines) or "None", inline=False)
         else:
             embed.add_field(name="🔔 Subscribed Stores", value="None", inline=False)
 
@@ -745,7 +745,7 @@ class RestockCog(commands.Cog):
         lines = []
         if removed:   lines.append("✅ Removed: "   + ", ".join(f"**{n}**" for n in removed))
         if not_found: lines.append("❌ Not found: " + ", ".join(f"**{n}**" for n in not_found))
-        await interaction.followup.send("\n".join(lines))
+        await interaction.followup.send("\n".join(lines) or "No changes made.")
 
     @admin.command(name="notify", description="Toggle restock ping notifications for a user or role")
     @app_commands.describe(store_name="Store to toggle", user="User to toggle", role="Role to toggle")
@@ -833,9 +833,9 @@ class RestockCog(commands.Cog):
         embed.add_field(name="Store", value=store_name, inline=True)
         embed.add_field(name="Price", value=price,      inline=True)
         if available:
-            embed.add_field(name=f"✅ In Stock ({len(available)})",      value=", ".join(v.get("title","") for v in available),   inline=False)
+            embed.add_field(name=f"✅ In Stock ({len(available)})",      value=", ".join(v.get("title","") for v in available) or "—",   inline=False)
         if unavailable:
-            embed.add_field(name=f"❌ Out of Stock ({len(unavailable)})", value=", ".join(v.get("title","") for v in unavailable), inline=False)
+            embed.add_field(name=f"❌ Out of Stock ({len(unavailable)})", value=", ".join(v.get("title","") for v in unavailable) or "—", inline=False)
         if updated_raw:
             embed.add_field(name="Last Updated", value=f"<t:{int(datetime.fromisoformat(updated_raw.replace('Z','+00:00')).timestamp())}:R>", inline=False)
         embed.set_footer(text=f"{bot_footer()} • {_display_domain(store_url.split('/')[2])}")

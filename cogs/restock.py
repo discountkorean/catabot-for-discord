@@ -5,12 +5,10 @@ import tomllib
 import json
 import requests
 import asyncio
-import os
-import sys
-import subprocess
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import os
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +28,6 @@ class SearchResult:
         self.image_url   = (product.get("images") or [{}])[0].get("src")
         self.product_url = f"{self.store_base}/products/{self.handle}"
 
-        # Group variants by size, keep available ones separate
         self.available:   list[dict] = []
         self.unavailable: list[dict] = []
         for v in product.get("variants", []):
@@ -64,29 +61,20 @@ class SearchPaginator(discord.ui.View):
     def build_embed(self) -> discord.Embed:
         r     = self.results[self.page]
         total = len(self.results)
-
         embed = discord.Embed(
-            title=r.title,
-            url=r.product_url,
-            color=0x5865F2,
+            title=r.title, url=r.product_url, color=0x5865F2,
             timestamp=datetime.now(ZoneInfo("UTC")),
         )
         if r.image_url:
             embed.set_thumbnail(url=r.image_url)
-
         embed.add_field(name="Store", value=r.store_name, inline=True)
         embed.add_field(name="Price", value=r.price,      inline=True)
-
         if r.available:
-            lines = "\n".join(
-                f"[{v['size']}]({v['cart_url']})" for v in r.available
-            )
+            lines = "\n".join(f"[{v['size']}]({v['cart_url']})" for v in r.available)
             embed.add_field(name=f"✅ In Stock ({len(r.available)})", value=lines, inline=False)
-
         if r.unavailable:
             sizes = ", ".join(v["size"] for v in r.unavailable)
             embed.add_field(name=f"❌ Out of Stock ({len(r.unavailable)})", value=sizes, inline=False)
-
         embed.set_footer(text=f"Result {self.page + 1} of {total}  •  {bot_footer()}")
         return embed
 
@@ -102,7 +90,8 @@ class SearchPaginator(discord.ui.View):
         self._update_buttons()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
-BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+BASE_DIR       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILE    = os.path.join(BASE_DIR, "config.toml")
 STATE_FILE     = os.path.join(BASE_DIR, "data", "stock_state.json")
 BOT_STATE_FILE = os.path.join(BASE_DIR, "data", "bot_state.json")
@@ -153,12 +142,10 @@ def save_bot_state(data: dict):
 def _fetch_products_sync(url: str) -> list:
     try:
         r = requests.get(url, headers=HEADERS, timeout=15)
-        # password-protected stores return 200 with HTML, or redirect to /password
         if r.status_code in (401, 403) or "password" in r.url:
             return []
         r.raise_for_status()
         data = r.json()
-        # some stores return HTML with a 200 during drops (not valid JSON)
         if not isinstance(data, dict):
             return []
         return data.get("products", [])
@@ -195,7 +182,6 @@ def build_variant_map(products: list) -> dict:
 # ── Embeds ────────────────────────────────────────────────────────────────────
 
 def _display_domain(domain: str) -> str:
-    """Replace secure. subdomain with www. for public-facing hyperlinks."""
     if domain.startswith("secure."):
         return "www." + domain[len("secure."):]
     return domain
@@ -215,27 +201,26 @@ def make_restock_embed(store_name: str, store_url: str, variants: list) -> disco
     sizes  = ", ".join(v["variant_title"] for v in variants)
     price  = f"${float(first['price']):.2f}"
     domain = _display_domain(store_url.split("/")[2])
-
-    embed = discord.Embed(
+    embed  = discord.Embed(
         title=f"🔔 Back in Stock: {first['title']}",
         color=0x57F287,
         timestamp=datetime.now(ZoneInfo("UTC")),
     )
     if first.get("image_url"):
         embed.set_thumbnail(url=first["image_url"])
-    embed.add_field(name="Sizes",  value=sizes,       inline=True)
-    embed.add_field(name="Price",  value=price,        inline=True)
-    embed.add_field(name="Store",  value=store_name,   inline=True)
-    embed.add_field(name="Stock",  value="✅ In Stock", inline=True)
-    embed.add_field(name="Link",   value=_product_url(store_url, first["handle"]), inline=False)
+    embed.add_field(name="Sizes", value=sizes,            inline=True)
+    embed.add_field(name="Price", value=price,             inline=True)
+    embed.add_field(name="Store", value=store_name,        inline=True)
+    embed.add_field(name="Stock", value="✅ In Stock",     inline=True)
+    embed.add_field(name="Link",  value=_product_url(store_url, first["handle"]), inline=False)
     embed.set_footer(text=f"{bot_footer()} • {domain}")
     return embed
 
 
 def make_new_item_embed(store_name: str, store_url: str, variants: list) -> discord.Embed:
-    first    = variants[0]
-    price    = f"${float(first['price']):.2f}"
-    domain   = store_url.split("/")[2]
+    first     = variants[0]
+    price     = f"${float(first['price']):.2f}"
+    domain    = _display_domain(store_url.split("/")[2])
     in_stock  = [v["variant_title"] for v in variants if v["available"]]
     out_stock = [v["variant_title"] for v in variants if not v["available"]]
     size_lines = ""
@@ -243,7 +228,6 @@ def make_new_item_embed(store_name: str, store_url: str, variants: list) -> disc
         size_lines += "✅ " + ", ".join(in_stock)
     if out_stock:
         size_lines += ("\n" if size_lines else "") + "❌ " + ", ".join(out_stock)
-
     embed = discord.Embed(
         title=f"🆕 New Item: {first['title']}",
         color=0xFEE75C,
@@ -251,51 +235,79 @@ def make_new_item_embed(store_name: str, store_url: str, variants: list) -> disc
     )
     if first.get("image_url"):
         embed.set_thumbnail(url=first["image_url"])
-    embed.add_field(name="Sizes",  value=size_lines,  inline=True)
-    embed.add_field(name="Price",  value=price,        inline=True)
-    embed.add_field(name="Store",  value=store_name,   inline=True)
-    embed.add_field(name="Link",   value=_product_url(store_url, first["handle"]), inline=False)
+    embed.add_field(name="Sizes", value=size_lines,        inline=True)
+    embed.add_field(name="Price", value=price,             inline=True)
+    embed.add_field(name="Store", value=store_name,        inline=True)
+    embed.add_field(name="Link",  value=_product_url(store_url, first["handle"]), inline=False)
     embed.set_footer(text=f"{bot_footer()} • {domain}")
     return embed
 
 
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
+# Default guild state template
+def _default_guild() -> dict:
+    return {
+        "alert_channel_id": None,
+        "extra_stores":     {},
+        "notifications":    {},
+    }
+
+
 class RestockCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot           = bot
         self.state         = load_state()
-        bot_state          = load_bot_state()
-        self.channel_id    = bot_state.get("alert_channel_id")
-        self.extra_stores: dict      = bot_state.get("extra_stores", {})
-        self.notifications: dict     = bot_state.get("notifications", {})
-        self.poll_interval: int      = bot_state.get("poll_interval", load_config()["monitor"]["poll_interval"])
+        raw                = load_bot_state()
+        self.poll_interval: int  = raw.get("poll_interval", load_config()["monitor"]["poll_interval"])
 
-    def get_all_stores(self) -> dict:
-        return {**load_config()["stores"], **self.extra_stores}
+        # Per-guild state keyed by guild_id string
+        # Migrate legacy single-guild format automatically
+        if "guilds" in raw:
+            self.guilds: dict = raw["guilds"]
+        else:
+            # Old format — will be migrated to guild keys in on_ready
+            self._legacy_state = raw
+            self.guilds        = {}
+
+    # ── Guild state helpers ───────────────────────────────────────────────────
+
+    def _guild(self, guild_id: int) -> dict:
+        key = str(guild_id)
+        if key not in self.guilds:
+            self.guilds[key] = _default_guild()
+        return self.guilds[key]
+
+    def _guild_stores(self, guild_id: int) -> dict:
+        return {**load_config()["stores"], **self._guild(guild_id)["extra_stores"]}
+
+    def _all_stores(self) -> dict:
+        """Union of config stores + every guild's extra stores."""
+        stores = dict(load_config()["stores"])
+        for gs in self.guilds.values():
+            stores.update(gs.get("extra_stores", {}))
+        return stores
 
     def persist(self):
-        save_bot_state({
-            "alert_channel_id": self.channel_id,
-            "extra_stores":     self.extra_stores,
-            "notifications":    self.notifications,
-            "poll_interval":    self.poll_interval,
-        })
+        raw = load_bot_state()
+        raw["guilds"]       = self.guilds
+        raw["poll_interval"] = self.poll_interval
+        # Remove legacy top-level keys if present
+        for key in ("alert_channel_id", "extra_stores", "notifications"):
+            raw.pop(key, None)
+        save_bot_state(raw)
 
     # ── Poll loop ─────────────────────────────────────────────────────────────
 
     @tasks.loop(seconds=300)
     async def poll(self):
-        channel = self.bot.get_channel(self.channel_id)
-        if not channel:
-            log.warning("Alert channel not found.")
-            return
-
         if self.poll.seconds != self.poll_interval:
             self.poll.change_interval(seconds=self.poll_interval)
 
-        stores = self.get_all_stores()
-        for store_name, url in stores.items():
+        config_stores = load_config()["stores"]
+        all_stores    = self._all_stores()
+
+        for store_name, url in all_stores.items():
             log.info(f"Checking {store_name}...")
             products = await fetch_products(url)
             if not products:
@@ -304,14 +316,13 @@ class RestockCog(commands.Cog):
             current  = build_variant_map(products)
             previous = self.state.get(store_name)
 
-            # Cold-start: no previous state for this store — seed silently
+            # Cold-start: seed silently, no alerts
             if previous is None:
                 self.state[store_name] = current
-                log.info(f"Seeded state for {store_name} ({len(current)} variants) — no alerts on first poll")
+                log.info(f"Seeded {store_name} ({len(current)} variants)")
                 continue
 
             restocked, new_items = {}, {}
-
             for vid, info in current.items():
                 handle = info["handle"]
                 if vid not in previous:
@@ -319,22 +330,39 @@ class RestockCog(commands.Cog):
                 elif not previous[vid].get("available", True) and info["available"]:
                     restocked.setdefault(handle, []).append(info)
 
-            subscribers = self.notifications.get(store_name, {})
-            if isinstance(subscribers, list):
-                subscribers = {"users": subscribers, "roles": []}
-            pings = [f"<@{uid}>" for uid in subscribers.get("users", [])] + \
-                    [f"<@&{rid}>" for rid in subscribers.get("roles", [])]
-            ping = " ".join(pings) if pings else None
-
-            for variants in restocked.values():
-                await channel.send(content=ping, embed=make_restock_embed(store_name, url, variants))
-                log.info(f"RESTOCK: {variants[0]['title']} @ {store_name}")
-
-            for variants in new_items.values():
-                await channel.send(embed=make_new_item_embed(store_name, url, variants))
-                log.info(f"NEW ITEM: {variants[0]['title']} @ {store_name}")
-
             self.state[store_name] = current
+
+            if not restocked and not new_items:
+                continue
+
+            # Route alerts to each guild that monitors this store
+            for guild_id_str, gs in self.guilds.items():
+                channel_id = gs.get("alert_channel_id")
+                if not channel_id:
+                    continue
+                channel = self.bot.get_channel(channel_id)
+                if not channel:
+                    continue
+
+                # Only alert if this store is in this guild's store list
+                guild_stores = {**config_stores, **gs.get("extra_stores", {})}
+                if store_name not in guild_stores:
+                    continue
+
+                notifs = gs.get("notifications", {}).get(store_name, {})
+                if isinstance(notifs, list):
+                    notifs = {"users": notifs, "roles": []}
+                pings = [f"<@{uid}>" for uid in notifs.get("users", [])] + \
+                        [f"<@&{rid}>" for rid in notifs.get("roles", [])]
+                ping = " ".join(pings) if pings else None
+
+                for variants in restocked.values():
+                    await channel.send(content=ping, embed=make_restock_embed(store_name, url, variants))
+                    log.info(f"RESTOCK: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
+
+                for variants in new_items.values():
+                    await channel.send(embed=make_new_item_embed(store_name, url, variants))
+                    log.info(f"NEW ITEM: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
         save_state(self.state)
 
@@ -354,7 +382,7 @@ class RestockCog(commands.Cog):
     )
 
     async def _store_autocomplete(self, interaction: discord.Interaction, current: str):
-        stores = self.get_all_stores()
+        stores = self._guild_stores(interaction.guild_id)
         return [
             app_commands.Choice(name=n, value=n)
             for n in stores if current.lower() in n.lower()
@@ -365,8 +393,11 @@ class RestockCog(commands.Cog):
     @tracker.command(name="status", description="Show current tracker status")
     async def tracker_status(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        gs      = self._guild(interaction.guild_id)
         running = self.poll.is_running()
-        stores  = self.get_all_stores()
+        stores  = self._guild_stores(interaction.guild_id)
+        ch_id   = gs.get("alert_channel_id")
+        channel = self.bot.get_channel(ch_id) if ch_id else None
 
         embed = discord.Embed(
             title="📊 Tracker Status",
@@ -375,6 +406,7 @@ class RestockCog(commands.Cog):
         )
         embed.add_field(name="State",    value="🟢 Running" if running else "🔴 Stopped",             inline=True)
         embed.add_field(name="Interval", value=f"{self.poll_interval}s ({self.poll_interval // 60}m)", inline=True)
+        embed.add_field(name="Channel",  value=channel.mention if channel else "Not set",              inline=True)
         embed.add_field(name="Stores",   value="\n".join(f"• {n}" for n in stores),                   inline=False)
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed)
@@ -384,24 +416,25 @@ class RestockCog(commands.Cog):
     @app_commands.autocomplete(store_name=_store_autocomplete)
     async def tracker_notify(self, interaction: discord.Interaction, store_name: str):
         await interaction.response.defer(ephemeral=True)
+        gs     = self._guild(interaction.guild_id)
+        stores = self._guild_stores(interaction.guild_id)
 
-        stores = self.get_all_stores()
         if store_name not in stores:
             await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.", ephemeral=True)
             return
 
-        store_notifs = self.notifications.setdefault(store_name, {"users": [], "roles": []})
-        if isinstance(store_notifs, list):
-            store_notifs = {"users": store_notifs, "roles": []}
-            self.notifications[store_name] = store_notifs
+        notifs = gs["notifications"].setdefault(store_name, {"users": [], "roles": []})
+        if isinstance(notifs, list):
+            notifs = {"users": notifs, "roles": []}
+            gs["notifications"][store_name] = notifs
 
         uid = interaction.user.id
-        if uid in store_notifs["users"]:
-            store_notifs["users"].remove(uid)
+        if uid in notifs["users"]:
+            notifs["users"].remove(uid)
             self.persist()
             await interaction.followup.send(f"🔕 You'll no longer be pinged for restocks at **{store_name}**.", ephemeral=True)
         else:
-            store_notifs["users"].append(uid)
+            notifs["users"].append(uid)
             self.persist()
             await interaction.followup.send(f"🔔 You'll be pinged whenever **{store_name}** restocks.", ephemeral=True)
 
@@ -410,8 +443,9 @@ class RestockCog(commands.Cog):
     @app_commands.autocomplete(store_name=_store_autocomplete)
     async def tracker_store(self, interaction: discord.Interaction, store_name: str):
         await interaction.response.defer()
+        gs     = self._guild(interaction.guild_id)
+        stores = self._guild_stores(interaction.guild_id)
 
-        stores = self.get_all_stores()
         if store_name not in stores:
             await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.")
             return
@@ -419,9 +453,8 @@ class RestockCog(commands.Cog):
         store_url = stores[store_name]
         domain    = _display_domain(store_url.split("/")[2])
         base_url  = f"https://{domain}"
-        is_custom = store_name in self.extra_stores
 
-        notifs = self.notifications.get(store_name, {})
+        notifs = gs["notifications"].get(store_name, {})
         if isinstance(notifs, list):
             notifs = {"users": notifs, "roles": []}
 
@@ -435,15 +468,10 @@ class RestockCog(commands.Cog):
             role = interaction.guild.get_role(rid)
             role_lines.append(role.mention if role else f"<@&{rid}>")
 
-        embed = discord.Embed(
-            title=f"🏪 {store_name}",
-            url=base_url,
-            color=0x5865F2,
-            timestamp=datetime.now(ZoneInfo("UTC")),
-        )
-        embed.add_field(name="URL",    value=base_url, inline=False)
-        embed.add_field(name="👤 Subscribed Users", value="\n".join(user_lines) if user_lines else "None", inline=False)
-        embed.add_field(name="🏷️ Subscribed Roles", value="\n".join(role_lines) if role_lines else "None", inline=False)
+        embed = discord.Embed(title=f"🏪 {store_name}", url=base_url, color=0x5865F2, timestamp=datetime.now(ZoneInfo("UTC")))
+        embed.add_field(name="URL",              value=base_url,                                              inline=False)
+        embed.add_field(name="👤 Subscribed Users", value="\n".join(user_lines) if user_lines else "None",   inline=False)
+        embed.add_field(name="🏷️ Subscribed Roles", value="\n".join(role_lines) if role_lines else "None",  inline=False)
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed)
 
@@ -451,24 +479,20 @@ class RestockCog(commands.Cog):
     @app_commands.describe(user="User to inspect (defaults to you)")
     async def tracker_user(self, interaction: discord.Interaction, user: discord.Member = None):
         await interaction.response.defer()
-
+        gs     = self._guild(interaction.guild_id)
         target = user or interaction.user
         uid    = target.id
-        stores = self.get_all_stores()
+        stores = self._guild_stores(interaction.guild_id)
 
         subscribed = []
-        for store_name, notifs in self.notifications.items():
+        for store_name, notifs in gs["notifications"].items():
             if isinstance(notifs, list):
                 if uid in notifs:
                     subscribed.append(store_name)
             elif uid in notifs.get("users", []):
                 subscribed.append(store_name)
 
-        embed = discord.Embed(
-            title=target.display_name,
-            color=0x5865F2,
-            timestamp=datetime.now(ZoneInfo("UTC")),
-        )
+        embed = discord.Embed(title=target.display_name, color=0x5865F2, timestamp=datetime.now(ZoneInfo("UTC")))
         embed.set_thumbnail(url=target.display_avatar.url)
         embed.add_field(name="Username", value=str(target), inline=True)
 
@@ -481,11 +505,12 @@ class RestockCog(commands.Cog):
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed)
 
-    def _resolve_channel(self, override: discord.TextChannel = None):
+    def _resolve_channel(self, guild_id: int, override: discord.TextChannel = None):
         if override:
             return override, None
-        if self.channel_id:
-            ch = self.bot.get_channel(self.channel_id)
+        ch_id = self._guild(guild_id).get("alert_channel_id")
+        if ch_id:
+            ch = self.bot.get_channel(ch_id)
             if ch:
                 return ch, None
         return None, "❌ No alert channel set — run `/rst admin start` first, or pass a `channel` argument."
@@ -496,14 +521,15 @@ class RestockCog(commands.Cog):
     @app_commands.describe(channel="Channel to send alerts to (defaults to current channel)")
     async def admin_start(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
         await interaction.response.defer()
-        alert_channel   = channel or interaction.channel
-        self.channel_id = alert_channel.id
+        gs            = self._guild(interaction.guild_id)
+        alert_channel = channel or interaction.channel
+        gs["alert_channel_id"] = alert_channel.id
         self.persist()
 
         if not self.poll.is_running():
             self.poll.start()
 
-        stores     = self.get_all_stores()
+        stores     = self._guild_stores(interaction.guild_id)
         store_list = "\n".join(f"• {name}" for name in stores)
         embed = discord.Embed(
             title="🟢 Tracker Started",
@@ -514,69 +540,66 @@ class RestockCog(commands.Cog):
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed)
 
-    @admin.command(name="stop", description="Stop monitoring")
+    @admin.command(name="stop", description="Stop monitoring for this server")
     async def admin_stop(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if self.poll.is_running():
-            self.poll.cancel()
-            await interaction.followup.send("🔴 Tracker stopped.")
-        else:
-            await interaction.followup.send("Tracker is not running.")
+        gs = self._guild(interaction.guild_id)
+        gs["alert_channel_id"] = None
+        self.persist()
 
-    @admin.command(name="interval", description="Set the poll interval (min 60s, max 600s)")
+        # Stop the loop only if no guild has an active channel
+        any_active = any(g.get("alert_channel_id") for g in self.guilds.values())
+        if not any_active and self.poll.is_running():
+            self.poll.cancel()
+            await interaction.followup.send("🔴 Tracker stopped (no active servers remaining).")
+        else:
+            await interaction.followup.send("🔴 Alerts disabled for this server.")
+
+    @admin.command(name="interval", description="Set the global poll interval (min 60s, max 600s)")
     @app_commands.describe(seconds="Interval in seconds (min 60, max 600)")
     async def admin_interval(self, interaction: discord.Interaction, seconds: int):
         await interaction.response.defer()
-
         if seconds < 60 or seconds > 600:
-            await interaction.followup.send(
-                f"❌ Interval must be between **60s** (1 min) and **600s** (10 min). Got `{seconds}s`."
-            )
+            await interaction.followup.send(f"❌ Interval must be between **60s** and **600s**. Got `{seconds}s`.")
             return
-
         self.poll_interval = seconds
         self.persist()
         if self.poll.is_running():
             self.poll.change_interval(seconds=seconds)
-
-        await interaction.followup.send(
-            f"✅ Poll interval updated to **{seconds}s** ({seconds // 60}m {seconds % 60}s)."
-        )
+        await interaction.followup.send(f"✅ Poll interval updated to **{seconds}s** ({seconds // 60}m {seconds % 60}s).")
 
     @admin.command(name="add", description="Add a store to monitor")
     @app_commands.describe(store_name="Display name for the store", url="Shopify products.json URL")
     async def admin_add(self, interaction: discord.Interaction, store_name: str, url: str):
         await interaction.response.defer()
+        gs  = self._guild(interaction.guild_id)
         url = url.split("?")[0].rstrip("/") + "?limit=1000"
         if not url.endswith("products.json?limit=1000"):
             url = url.rstrip("/") + "/products.json?limit=1000"
-        self.extra_stores[store_name] = url
+        gs["extra_stores"][store_name] = url
         self.persist()
         await interaction.followup.send(f"✅ Added **{store_name}**\n`{url}`")
 
     @admin.command(name="remove", description="Remove one or more stores from monitoring")
     @app_commands.describe(
-        store1="Store to remove",
-        store2="Additional store to remove",
-        store3="Additional store to remove",
-        store4="Additional store to remove",
-        store5="Additional store to remove",
+        store1="Store to remove", store2="Additional store", store3="Additional store",
+        store4="Additional store", store5="Additional store",
     )
     @app_commands.autocomplete(store1=_store_autocomplete, store2=_store_autocomplete,
                                store3=_store_autocomplete, store4=_store_autocomplete,
                                store5=_store_autocomplete)
     async def admin_remove(self, interaction: discord.Interaction,
-                           store1: str,
-                           store2: str = None, store3: str = None,
+                           store1: str, store2: str = None, store3: str = None,
                            store4: str = None, store5: str = None):
         await interaction.response.defer()
-        names = [s for s in [store1, store2, store3, store4, store5] if s]
+        gs            = self._guild(interaction.guild_id)
+        names         = [s for s in [store1, store2, store3, store4, store5] if s]
         config_stores = load_config()["stores"]
         removed, in_config, not_found = [], [], []
 
         for name in names:
-            if name in self.extra_stores:
-                del self.extra_stores[name]
+            if name in gs["extra_stores"]:
+                del gs["extra_stores"][name]
                 removed.append(name)
             elif name in config_stores:
                 in_config.append(name)
@@ -587,85 +610,67 @@ class RestockCog(commands.Cog):
             self.persist()
 
         lines = []
-        if removed:
-            lines.append("✅ Removed: " + ", ".join(f"**{n}**" for n in removed))
-        if in_config:
-            lines.append("⚠️ In `config.toml` (remove manually): " + ", ".join(f"**{n}**" for n in in_config))
-        if not_found:
-            lines.append("❌ Not found: " + ", ".join(f"**{n}**" for n in not_found))
+        if removed:   lines.append("✅ Removed: "                             + ", ".join(f"**{n}**" for n in removed))
+        if in_config: lines.append("⚠️ In `config.toml` (remove manually): " + ", ".join(f"**{n}**" for n in in_config))
+        if not_found: lines.append("❌ Not found: "                           + ", ".join(f"**{n}**" for n in not_found))
         await interaction.followup.send("\n".join(lines))
 
     @admin.command(name="notify", description="Toggle restock ping notifications for a user or role")
-    @app_commands.describe(
-        store_name="Store to toggle notifications for",
-        user="User to toggle",
-        role="Role to toggle",
-    )
+    @app_commands.describe(store_name="Store to toggle", user="User to toggle", role="Role to toggle")
     @app_commands.autocomplete(store_name=_store_autocomplete)
-    async def admin_notify(
-        self,
-        interaction: discord.Interaction,
-        store_name: str,
-        user: discord.Member = None,
-        role: discord.Role = None,
-    ):
+    async def admin_notify(self, interaction: discord.Interaction, store_name: str,
+                           user: discord.Member = None, role: discord.Role = None):
         await interaction.response.defer(ephemeral=True)
+        gs = self._guild(interaction.guild_id)
 
         if not user and not role:
-            await interaction.followup.send("❌ Provide a `user` or `role` to toggle. To toggle yourself use `/rst notify`.", ephemeral=True)
+            await interaction.followup.send("❌ Provide a `user` or `role`. To toggle yourself use `/rst notify`.", ephemeral=True)
             return
 
-        stores = self.get_all_stores()
+        stores = self._guild_stores(interaction.guild_id)
         if store_name not in stores:
             await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.", ephemeral=True)
             return
 
-        store_notifs = self.notifications.setdefault(store_name, {"users": [], "roles": []})
-        if isinstance(store_notifs, list):
-            store_notifs = {"users": store_notifs, "roles": []}
-            self.notifications[store_name] = store_notifs
+        notifs = gs["notifications"].setdefault(store_name, {"users": [], "roles": []})
+        if isinstance(notifs, list):
+            notifs = {"users": notifs, "roles": []}
+            gs["notifications"][store_name] = notifs
 
         if role:
             rid = role.id
-            if rid in store_notifs["roles"]:
-                store_notifs["roles"].remove(rid)
+            if rid in notifs["roles"]:
+                notifs["roles"].remove(rid)
                 self.persist()
-                await interaction.followup.send(f"🔕 {role.mention} will no longer be pinged for restocks at **{store_name}**.", ephemeral=True)
+                await interaction.followup.send(f"🔕 {role.mention} will no longer be pinged for **{store_name}**.", ephemeral=True)
             else:
-                store_notifs["roles"].append(rid)
+                notifs["roles"].append(rid)
                 self.persist()
                 await interaction.followup.send(f"🔔 {role.mention} will be pinged whenever **{store_name}** restocks.", ephemeral=True)
         else:
             uid = user.id
-            if uid in store_notifs["users"]:
-                store_notifs["users"].remove(uid)
+            if uid in notifs["users"]:
+                notifs["users"].remove(uid)
                 self.persist()
-                await interaction.followup.send(f"🔕 {user.mention} will no longer be pinged for restocks at **{store_name}**.", ephemeral=True)
+                await interaction.followup.send(f"🔕 {user.mention} will no longer be pinged for **{store_name}**.", ephemeral=True)
             else:
-                store_notifs["users"].append(uid)
+                notifs["users"].append(uid)
                 self.persist()
                 await interaction.followup.send(f"🔔 {user.mention} will be pinged whenever **{store_name}** restocks.", ephemeral=True)
 
     @admin.command(name="recent", description="Post the most recently updated item from a store")
-    @app_commands.describe(
-        store_name="Store to check",
-        channel="Channel to post in (defaults to tracker channel)",
-    )
+    @app_commands.describe(store_name="Store to check", channel="Channel to post in (defaults to tracker channel)")
     @app_commands.autocomplete(store_name=_store_autocomplete)
-    async def admin_recent(
-        self,
-        interaction: discord.Interaction,
-        store_name: str,
-        channel: discord.TextChannel = None,
-    ):
+    async def admin_recent(self, interaction: discord.Interaction,
+                           store_name: str, channel: discord.TextChannel = None):
         await interaction.response.defer(ephemeral=True)
+        stores = self._guild_stores(interaction.guild_id)
 
-        stores = self.get_all_stores()
         if store_name not in stores:
             await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.", ephemeral=True)
             return
 
-        dest, err = self._resolve_channel(channel)
+        dest, err = self._resolve_channel(interaction.guild_id, channel)
         if err:
             await interaction.followup.send(err, ephemeral=True)
             return
@@ -689,18 +694,16 @@ class RestockCog(commands.Cog):
 
         embed = discord.Embed(
             title=f"🕐 Most Recent: {latest.get('title', 'Unknown')}",
-            url=product_url,
-            color=0x5865F2,
-            timestamp=datetime.now(ZoneInfo("UTC")),
+            url=product_url, color=0x5865F2, timestamp=datetime.now(ZoneInfo("UTC")),
         )
         if image_url:
             embed.set_thumbnail(url=image_url)
         embed.add_field(name="Store", value=store_name, inline=True)
         embed.add_field(name="Price", value=price,      inline=True)
         if available:
-            embed.add_field(name=f"✅ In Stock ({len(available)})",    value=", ".join(v.get("title", "") for v in available),   inline=False)
+            embed.add_field(name=f"✅ In Stock ({len(available)})",      value=", ".join(v.get("title","") for v in available),   inline=False)
         if unavailable:
-            embed.add_field(name=f"❌ Out of Stock ({len(unavailable)})", value=", ".join(v.get("title", "") for v in unavailable), inline=False)
+            embed.add_field(name=f"❌ Out of Stock ({len(unavailable)})", value=", ".join(v.get("title","") for v in unavailable), inline=False)
         if updated_raw:
             embed.add_field(name="Last Updated", value=f"<t:{int(datetime.fromisoformat(updated_raw.replace('Z','+00:00')).timestamp())}:R>", inline=False)
         embed.set_footer(text=f"{bot_footer()} • {_display_domain(store_url.split('/')[2])}")
@@ -709,42 +712,35 @@ class RestockCog(commands.Cog):
         await interaction.followup.send(f"✅ Posted most recent item from **{store_name}** to {dest.mention}.", ephemeral=True)
 
     @admin.command(name="alert", description="Send a fake restock alert to test ping notifications")
-    @app_commands.describe(
-        store_name="Store to simulate a restock alert for",
-        channel="Channel to post in (defaults to tracker channel)",
-    )
+    @app_commands.describe(store_name="Store to simulate", channel="Channel to post in (defaults to tracker channel)")
     @app_commands.autocomplete(store_name=_store_autocomplete)
-    async def admin_alert(self, interaction: discord.Interaction, store_name: str, channel: discord.TextChannel = None):
+    async def admin_alert(self, interaction: discord.Interaction,
+                          store_name: str, channel: discord.TextChannel = None):
         await interaction.response.defer(ephemeral=True)
+        gs     = self._guild(interaction.guild_id)
+        stores = self._guild_stores(interaction.guild_id)
 
-        stores = self.get_all_stores()
         if store_name not in stores:
             await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.", ephemeral=True)
             return
 
-        dest, err = self._resolve_channel(channel)
+        dest, err = self._resolve_channel(interaction.guild_id, channel)
         if err:
             await interaction.followup.send(err, ephemeral=True)
             return
 
-        store_url = stores[store_name]
-        fake_variants = [{
-            "title":         "Debug Product",
-            "variant_title": "M",
-            "price":         "99.99",
-            "handle":        "debug-product",
-            "image_url":     None,
-            "available":     True,
-        }]
+        store_url     = stores[store_name]
+        fake_variants = [{"title": "Debug Product", "variant_title": "M", "price": "99.99",
+                          "handle": "debug-product", "image_url": None, "available": True}]
 
-        subscribers = self.notifications.get(store_name, {})
-        if isinstance(subscribers, list):
-            subscribers = {"users": subscribers, "roles": []}
-        pings = [f"<@{uid}>" for uid in subscribers.get("users", [])] + \
-                [f"<@&{rid}>" for rid in subscribers.get("roles", [])]
-        ping = " ".join(pings) if pings else None
+        notifs = gs["notifications"].get(store_name, {})
+        if isinstance(notifs, list):
+            notifs = {"users": notifs, "roles": []}
+        pings = [f"<@{uid}>" for uid in notifs.get("users", [])] + \
+                [f"<@&{rid}>" for rid in notifs.get("roles", [])]
+        ping  = " ".join(pings) if pings else None
 
-        embed = make_restock_embed(store_name, store_url, fake_variants)
+        embed       = make_restock_embed(store_name, store_url, fake_variants)
         embed.title = f"🧪 [DEBUG] {embed.title}"
         embed.color = 0xEB459E
 
@@ -758,30 +754,21 @@ class RestockCog(commands.Cog):
     # ── Search ────────────────────────────────────────────────────────────────
 
     @tracker.command(name="search", description="Search for a product across one or more monitored stores")
-    @app_commands.describe(
-        query="Product name or keyword to search for",
-        store1="Store to search in",
-        store2="Additional store to search",
-        store3="Additional store to search",
-        store4="Additional store to search",
-        store5="Additional store to search",
-    )
+    @app_commands.describe(query="Product name or keyword", store1="Store to search",
+                           store2="Additional store", store3="Additional store",
+                           store4="Additional store", store5="Additional store")
     @app_commands.autocomplete(store1=_store_autocomplete, store2=_store_autocomplete,
                                store3=_store_autocomplete, store4=_store_autocomplete,
                                store5=_store_autocomplete)
-    async def restock_search(self, interaction: discord.Interaction,
-                             query: str, store1: str,
+    async def restock_search(self, interaction: discord.Interaction, query: str, store1: str,
                              store2: str = None, store3: str = None,
                              store4: str = None, store5: str = None):
         await interaction.response.defer()
-
-        all_stores  = self.get_all_stores()
-        chosen      = [s for s in [store1, store2, store3, store4, store5] if s]
-        invalid     = [s for s in chosen if s not in all_stores]
+        all_stores = self._guild_stores(interaction.guild_id)
+        chosen     = [s for s in [store1, store2, store3, store4, store5] if s]
+        invalid    = [s for s in chosen if s not in all_stores]
         if invalid:
-            await interaction.followup.send(
-                f"❌ Unknown stores: {', '.join(f'**{s}**' for s in invalid)}", ephemeral=True
-            )
+            await interaction.followup.send(f"❌ Unknown stores: {', '.join(f'**{s}**' for s in invalid)}", ephemeral=True)
             return
 
         results: list[SearchResult] = []
@@ -797,31 +784,49 @@ class RestockCog(commands.Cog):
 
         store_label = ", ".join(f"**{n}**" for n in chosen)
         if not results:
-            await interaction.followup.send(
-                f"No products found matching **{query}** in {store_label}.", ephemeral=True
-            )
+            await interaction.followup.send(f"No products found matching **{query}** in {store_label}.", ephemeral=True)
             return
 
-        results = results[:MAX_SEARCH_RESULTS]
+        results   = results[:MAX_SEARCH_RESULTS]
         paginator = SearchPaginator(results)
         await interaction.followup.send(embed=paginator.build_embed(), view=paginator)
 
-    # ── Restart confirmation on boot ──────────────────────────────────────────
+    # ── Startup ───────────────────────────────────────────────────────────────
 
     @commands.Cog.listener()
     async def on_ready(self):
-        bot_state          = load_bot_state()
-        restart_channel_id = bot_state.pop("restart_channel_id", None)
-        restart_message_id = bot_state.pop("restart_message_id", None)
-        restart_time       = bot_state.pop("restart_time", 0)
+        # Migrate legacy single-guild bot_state format
+        if hasattr(self, "_legacy_state") and self.bot.guilds:
+            legacy = self._legacy_state
+            if legacy.get("alert_channel_id") and not self.guilds:
+                guild_id = str(self.bot.guilds[0].id)
+                self.guilds[guild_id] = {
+                    "alert_channel_id": legacy.get("alert_channel_id"),
+                    "extra_stores":     legacy.get("extra_stores", {}),
+                    "notifications":    legacy.get("notifications", {}),
+                }
+                self.persist()
+                log.info(f"Migrated legacy bot state to guild {guild_id}")
+            del self._legacy_state
+
+        # Resume poll if any guild has an active channel
+        any_active = any(g.get("alert_channel_id") for g in self.guilds.values())
+        if any_active and not self.poll.is_running():
+            self.poll.start()
+
+        # Edit restart confirmation message if present
+        raw                = load_bot_state()
+        restart_channel_id = raw.pop("restart_channel_id", None)
+        restart_message_id = raw.pop("restart_message_id", None)
+        restart_time       = raw.pop("restart_time", 0)
         if restart_channel_id or restart_message_id:
-            save_bot_state(bot_state)
+            save_bot_state(raw)
 
         elapsed = datetime.now(ZoneInfo("UTC")).timestamp() - restart_time
         if restart_channel_id and restart_message_id and elapsed < 30:
             try:
                 channel = self.bot.get_channel(restart_channel_id)
-                msg = await channel.fetch_message(restart_message_id)
+                msg     = await channel.fetch_message(restart_message_id)
                 await msg.edit(content="✅ Restarted successfully.")
             except Exception as e:
                 log.warning(f"Could not edit restart message: {e}")

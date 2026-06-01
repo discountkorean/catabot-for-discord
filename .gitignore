@@ -1,6 +1,6 @@
 .env
 .claude/
-__pycache__/
-*.pyc
+**/__pycache__/
+**/*.pyc
 logs/
 data/bot.pid

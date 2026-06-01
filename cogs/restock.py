@@ -428,11 +428,11 @@ class RestockCog(commands.Cog):
                 continue
 
             current  = build_variant_map(products)
-            previous = self.state.get(store_name)
+            previous = self.state.get(url)
 
             # Cold-start: seed silently, no alerts
             if previous is None:
-                self.state[store_name] = current
+                self.state[url] = current
                 log.info(f"Seeded {store_name} ({len(current)} variants)")
                 continue
 
@@ -444,7 +444,7 @@ class RestockCog(commands.Cog):
                 elif not previous[vid].get("available", True) and info["available"]:
                     restocked.setdefault(handle, []).append(info)
 
-            self.state[store_name] = current
+            self.state[url] = current
 
             if not restocked and not new_items:
                 continue

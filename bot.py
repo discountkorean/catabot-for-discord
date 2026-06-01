@@ -44,6 +44,7 @@ class StockBot(commands.Bot):
     async def setup_hook(self):
         with open(PID_FILE, "w") as f:
             f.write(str(os.getpid()))
+        self.tree.add_command(help_group)
         await self.load_extension("cogs.restock")
         await self.tree.sync()
         log.info("Slash commands synced")
@@ -52,16 +53,13 @@ class StockBot(commands.Bot):
         log.info(f"Logged in as {self.user} (ID: {self.user.id})")
 
 
+help_group = app_commands.Group(name="help", description="Command reference")
+
 bot = StockBot()
 
-
-@bot.tree.command(name="help", description="Show all available commands")
-async def cmd_help(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="📖 cata.ai — Commands",
-        color=0x5865F2,
-        timestamp=datetime.now(ZoneInfo("UTC")),
-    )
+@help_group.command(name="general", description="Show all public commands")
+async def help_general(interaction: discord.Interaction):
+    embed = discord.Embed(title="📖 cata.ai — Commands", color=0x5865F2, timestamp=datetime.now(ZoneInfo("UTC")))
     embed.add_field(name="📊 Tracker", value=(
         "`/rst status` — Show tracker state and monitored stores\n"
         "`/rst notify [store]` — Toggle restock pings for yourself\n"
@@ -69,10 +67,55 @@ async def cmd_help(interaction: discord.Interaction):
         "`/rst user [user]` — Show a user's subscribed stores\n"
         "`/rst search [query] [stores...]` — Search for a product"
     ), inline=False)
-    embed.add_field(name="🔍 General", value=(
-        "`/help` — Show this message"
+    embed.add_field(name="🔍 General", value="`/help general` — Show this message", inline=False)
+    embed.set_footer(text="cata.ai • Admin commands visible via /help admin")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@help_group.command(name="rst", description="Show all /rst commands")
+async def help_rst(interaction: discord.Interaction):
+    embed = discord.Embed(title="📖 cata.ai — /rst Commands", color=0x5865F2, timestamp=datetime.now(ZoneInfo("UTC")))
+    embed.add_field(name="📊 Tracker", value=(
+        "`/rst status` — Tracker state, interval, and store list\n"
+        "`/rst notify [store]` — Toggle restock pings for yourself\n"
+        "`/rst store [store]` — Store info and current subscribers\n"
+        "`/rst user [user]` — Stores a user is subscribed to\n"
+        "`/rst search [query] [stores...]` — Search for a product across stores"
     ), inline=False)
-    embed.set_footer(text="cata.ai • Admin commands: /rst admin help")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@help_group.command(name="admin", description="Show all admin commands")
+@app_commands.checks.has_permissions(administrator=True)
+async def help_admin(interaction: discord.Interaction):
+    embed = discord.Embed(title="🔐 cata.ai — Admin Commands", color=0xEB459E, timestamp=datetime.now(ZoneInfo("UTC")))
+    embed.add_field(name="⚙️ Bot", value=(
+        "`/restart` — Restart the bot process"
+    ), inline=False)
+    embed.add_field(name="📋 For /rst admin commands", value="Use `/help rst-admin`", inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@help_group.command(name="rst-admin", description="Show all /rst admin commands")
+@app_commands.checks.has_permissions(administrator=True)
+async def help_rst_admin(interaction: discord.Interaction):
+    embed = discord.Embed(title="🔐 cata.ai — /rst admin Commands", color=0xEB459E, timestamp=datetime.now(ZoneInfo("UTC")))
+    embed.add_field(name="⚙️ Tracker Control", value=(
+        "`/rst admin start [channel]` — Start monitoring\n"
+        "`/rst admin stop` — Stop monitoring\n"
+        "`/rst admin interval [seconds]` — Set poll interval (60–600s)"
+    ), inline=False)
+    embed.add_field(name="🏪 Store Management", value=(
+        "`/rst admin add [name] [url]` — Add a store\n"
+        "`/rst admin remove [store...]` — Remove stores"
+    ), inline=False)
+    embed.add_field(name="🔔 Notifications", value=(
+        "`/rst admin notify [store] [user/role]` — Toggle pings for a user or role"
+    ), inline=False)
+    embed.add_field(name="🧪 Debug", value=(
+        "`/rst admin recent [store] [channel]` — Post most recent item\n"
+        "`/rst admin alert [store] [channel]` — Send fake restock alert"
+    ), inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

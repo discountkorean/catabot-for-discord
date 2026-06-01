@@ -706,36 +706,6 @@ class RestockCog(commands.Cog):
         await dest.send(embed=embed)
         await interaction.followup.send(f"✅ Posted most recent item from **{store_name}** to {dest.mention}.", ephemeral=True)
 
-    @admin.command(name="help", description="Show all admin commands")
-    async def admin_help(self, interaction: discord.Interaction):
-        embed = discord.Embed(
-            title="🔐 cata.ai — Admin Commands",
-            color=0xEB459E,
-            timestamp=datetime.now(ZoneInfo("UTC")),
-        )
-        embed.add_field(name="⚙️ Tracker Control", value=(
-            "`/rst admin start [channel]` — Start monitoring\n"
-            "`/rst admin stop` — Stop monitoring\n"
-            "`/rst admin interval [seconds]` — Set poll interval (60–600s)"
-        ), inline=False)
-        embed.add_field(name="🏪 Store Management", value=(
-            "`/rst admin add [name] [url]` — Add a store\n"
-            "`/rst admin remove [store...]` — Remove stores"
-        ), inline=False)
-        embed.add_field(name="🔔 Notifications", value=(
-            "`/rst admin notify [store] [user/role]` — Toggle pings for a user or role"
-        ), inline=False)
-        embed.add_field(name="🧪 Debug", value=(
-            "`/rst admin recent [store] [channel]` — Post most recent item\n"
-            "`/rst admin alert [store] [channel]` — Send fake restock alert\n"
-            "`/rst admin help` — Show this message"
-        ), inline=False)
-        embed.add_field(name="🔁 Bot", value=(
-            "`/restart` — Restart the bot process"
-        ), inline=False)
-        embed.set_footer(text=bot_footer())
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
     @admin.command(name="alert", description="Send a fake restock alert to test ping notifications")
     @app_commands.describe(
         store_name="Store to simulate a restock alert for",

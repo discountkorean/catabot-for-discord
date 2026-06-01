@@ -93,10 +93,12 @@ class SearchPaginator(discord.ui.View):
 
 BASE_DIR       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILE    = os.path.join(BASE_DIR, "config.toml")
-STATE_FILE     = os.path.join(BASE_DIR, "data", "stock_state.json")
-BOT_STATE_FILE = os.path.join(BASE_DIR, "data", "bot_state.json")
+DATA_DIR       = os.path.join(BASE_DIR, "data")
+GUILDS_DIR     = os.path.join(DATA_DIR, "guilds")
+STATE_FILE     = os.path.join(DATA_DIR, "stock_state.json")
+BOT_STATE_FILE = os.path.join(DATA_DIR, "bot_state.json")
 
-os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+os.makedirs(GUILDS_DIR, exist_ok=True)
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
@@ -135,6 +137,34 @@ def load_bot_state() -> dict:
 def save_bot_state(data: dict):
     with open(BOT_STATE_FILE, "w") as f:
         json.dump(data, f, indent=2)
+
+
+def _guild_file(guild_id: int | str) -> str:
+    return os.path.join(GUILDS_DIR, f"{guild_id}.json")
+
+
+def load_guild_state(guild_id: int | str) -> dict:
+    path = _guild_file(guild_id)
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return {"alert_channel_id": None, "extra_stores": {}, "notifications": {}}
+
+
+def save_guild_state(guild_id: int | str, data: dict):
+    with open(_guild_file(guild_id), "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def load_all_guilds() -> dict:
+    """Load all guild state files into a dict keyed by guild_id string."""
+    guilds = {}
+    if os.path.isdir(GUILDS_DIR):
+        for fname in os.listdir(GUILDS_DIR):
+            if fname.endswith(".json"):
+                guild_id = fname[:-5]
+                guilds[guild_id] = load_guild_state(guild_id)
+    return guilds
 
 
 # ── Shopify helpers ───────────────────────────────────────────────────────────
@@ -259,43 +289,45 @@ class RestockCog(commands.Cog):
         self.bot           = bot
         self.state         = load_state()
         raw                = load_bot_state()
-        self.poll_interval: int  = raw.get("poll_interval", load_config()["monitor"]["poll_interval"])
+        self.poll_interval: int = raw.get("poll_interval", load_config()["monitor"]["poll_interval"])
 
-        # Per-guild state keyed by guild_id string
-        # Migrate legacy single-guild format automatically
-        if "guilds" in raw:
-            self.guilds: dict = raw["guilds"]
-        else:
-            # Old format — will be migrated to guild keys in on_ready
+        # Load all per-guild files from data/guilds/
+        self.guilds: dict = load_all_guilds()
+
+        # Detect legacy single-guild format and migrate in on_ready
+        if not self.guilds and ("alert_channel_id" in raw or "guilds" in raw):
             self._legacy_state = raw
-            self.guilds        = {}
 
     # ── Guild state helpers ───────────────────────────────────────────────────
 
     def _guild(self, guild_id: int) -> dict:
         key = str(guild_id)
         if key not in self.guilds:
-            self.guilds[key] = _default_guild()
+            self.guilds[key] = {"alert_channel_id": None, "extra_stores": {}, "notifications": {}}
         return self.guilds[key]
 
     def _guild_stores(self, guild_id: int) -> dict:
         return {**load_config()["stores"], **self._guild(guild_id)["extra_stores"]}
 
     def _all_stores(self) -> dict:
-        """Union of config stores + every guild's extra stores."""
         stores = dict(load_config()["stores"])
         for gs in self.guilds.values():
             stores.update(gs.get("extra_stores", {}))
         return stores
 
-    def persist(self):
+    def persist(self, guild_id: int | str = None):
+        """Save global bot state and optionally one guild, or all guilds."""
         raw = load_bot_state()
-        raw["guilds"]       = self.guilds
         raw["poll_interval"] = self.poll_interval
-        # Remove legacy top-level keys if present
-        for key in ("alert_channel_id", "extra_stores", "notifications"):
+        for key in ("alert_channel_id", "extra_stores", "notifications", "guilds"):
             raw.pop(key, None)
         save_bot_state(raw)
+
+        if guild_id is not None:
+            save_guild_state(guild_id, self.guilds[str(guild_id)])
+        else:
+            for gid, gs in self.guilds.items():
+                save_guild_state(gid, gs)
 
     # ── Poll loop ─────────────────────────────────────────────────────────────
 
@@ -431,11 +463,11 @@ class RestockCog(commands.Cog):
         uid = interaction.user.id
         if uid in notifs["users"]:
             notifs["users"].remove(uid)
-            self.persist()
+            self.persist(interaction.guild_id)
             await interaction.followup.send(f"🔕 You'll no longer be pinged for restocks at **{store_name}**.", ephemeral=True)
         else:
             notifs["users"].append(uid)
-            self.persist()
+            self.persist(interaction.guild_id)
             await interaction.followup.send(f"🔔 You'll be pinged whenever **{store_name}** restocks.", ephemeral=True)
 
     @tracker.command(name="store", description="Show subscribers and info for a store")
@@ -524,7 +556,7 @@ class RestockCog(commands.Cog):
         gs            = self._guild(interaction.guild_id)
         alert_channel = channel or interaction.channel
         gs["alert_channel_id"] = alert_channel.id
-        self.persist()
+        self.persist(interaction.guild_id)
 
         if not self.poll.is_running():
             self.poll.start()
@@ -545,7 +577,7 @@ class RestockCog(commands.Cog):
         await interaction.response.defer()
         gs = self._guild(interaction.guild_id)
         gs["alert_channel_id"] = None
-        self.persist()
+        self.persist(interaction.guild_id)
 
         # Stop the loop only if no guild has an active channel
         any_active = any(g.get("alert_channel_id") for g in self.guilds.values())
@@ -563,7 +595,7 @@ class RestockCog(commands.Cog):
             await interaction.followup.send(f"❌ Interval must be between **60s** and **600s**. Got `{seconds}s`.")
             return
         self.poll_interval = seconds
-        self.persist()
+        self.persist(interaction.guild_id)
         if self.poll.is_running():
             self.poll.change_interval(seconds=seconds)
         await interaction.followup.send(f"✅ Poll interval updated to **{seconds}s** ({seconds // 60}m {seconds % 60}s).")
@@ -577,7 +609,7 @@ class RestockCog(commands.Cog):
         if not url.endswith("products.json?limit=1000"):
             url = url.rstrip("/") + "/products.json?limit=1000"
         gs["extra_stores"][store_name] = url
-        self.persist()
+        self.persist(interaction.guild_id)
         await interaction.followup.send(f"✅ Added **{store_name}**\n`{url}`")
 
     @admin.command(name="remove", description="Remove one or more stores from monitoring")
@@ -607,7 +639,7 @@ class RestockCog(commands.Cog):
                 not_found.append(name)
 
         if removed:
-            self.persist()
+            self.persist(interaction.guild_id)
 
         lines = []
         if removed:   lines.append("✅ Removed: "                             + ", ".join(f"**{n}**" for n in removed))
@@ -641,21 +673,21 @@ class RestockCog(commands.Cog):
             rid = role.id
             if rid in notifs["roles"]:
                 notifs["roles"].remove(rid)
-                self.persist()
+                self.persist(interaction.guild_id)
                 await interaction.followup.send(f"🔕 {role.mention} will no longer be pinged for **{store_name}**.", ephemeral=True)
             else:
                 notifs["roles"].append(rid)
-                self.persist()
+                self.persist(interaction.guild_id)
                 await interaction.followup.send(f"🔔 {role.mention} will be pinged whenever **{store_name}** restocks.", ephemeral=True)
         else:
             uid = user.id
             if uid in notifs["users"]:
                 notifs["users"].remove(uid)
-                self.persist()
+                self.persist(interaction.guild_id)
                 await interaction.followup.send(f"🔕 {user.mention} will no longer be pinged for **{store_name}**.", ephemeral=True)
             else:
                 notifs["users"].append(uid)
-                self.persist()
+                self.persist(interaction.guild_id)
                 await interaction.followup.send(f"🔔 {user.mention} will be pinged whenever **{store_name}** restocks.", ephemeral=True)
 
     @admin.command(name="recent", description="Post the most recently updated item from a store")
@@ -805,7 +837,7 @@ class RestockCog(commands.Cog):
                     "extra_stores":     legacy.get("extra_stores", {}),
                     "notifications":    legacy.get("notifications", {}),
                 }
-                self.persist()
+                self.persist(guild_id)
                 log.info(f"Migrated legacy bot state to guild {guild_id}")
             del self._legacy_state
 

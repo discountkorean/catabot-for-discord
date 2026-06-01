@@ -76,6 +76,7 @@ bot = StockBot()
 
 
 @bot.tree.command(name="restart", description="Restart the bot process")
+@app_commands.checks.has_permissions(administrator=True)
 async def cmd_restart(interaction: discord.Interaction):
     from cogs.restock import load_bot_state, save_bot_state
     await interaction.response.defer()

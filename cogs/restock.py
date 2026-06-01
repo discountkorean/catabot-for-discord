@@ -94,11 +94,10 @@ class SearchPaginator(discord.ui.View):
 BASE_DIR       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILE    = os.path.join(BASE_DIR, "config.toml")
 DATA_DIR       = os.path.join(BASE_DIR, "data")
-GUILDS_DIR     = os.path.join(DATA_DIR, "guilds")
 STATE_FILE     = os.path.join(DATA_DIR, "stock_state.json")
 BOT_STATE_FILE = os.path.join(DATA_DIR, "bot_state.json")
 
-os.makedirs(GUILDS_DIR, exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
@@ -139,8 +138,12 @@ def save_bot_state(data: dict):
         json.dump(data, f, indent=2)
 
 
+def _guild_dir(guild_id: int | str) -> str:
+    return os.path.join(DATA_DIR, str(guild_id))
+
+
 def _guild_file(guild_id: int | str) -> str:
-    return os.path.join(GUILDS_DIR, f"{guild_id}.json")
+    return os.path.join(_guild_dir(guild_id), "state.json")
 
 
 def load_guild_state(guild_id: int | str) -> dict:
@@ -152,18 +155,18 @@ def load_guild_state(guild_id: int | str) -> dict:
 
 
 def save_guild_state(guild_id: int | str, data: dict):
+    os.makedirs(_guild_dir(guild_id), exist_ok=True)
     with open(_guild_file(guild_id), "w") as f:
         json.dump(data, f, indent=2)
 
 
 def load_all_guilds() -> dict:
-    """Load all guild state files into a dict keyed by guild_id string."""
+    """Load all guild state folders from data/{guild_id}/state.json."""
     guilds = {}
-    if os.path.isdir(GUILDS_DIR):
-        for fname in os.listdir(GUILDS_DIR):
-            if fname.endswith(".json"):
-                guild_id = fname[:-5]
-                guilds[guild_id] = load_guild_state(guild_id)
+    for entry in os.scandir(DATA_DIR):
+        if entry.is_dir() and entry.name.isdigit():
+            guild_id = entry.name
+            guilds[guild_id] = load_guild_state(guild_id)
     return guilds
 
 

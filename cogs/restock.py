@@ -104,9 +104,14 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 # ── Persistence ──────────────────────────────────────────────────────────────
 
+_config_cache: dict | None = None
+
 def load_config() -> dict:
-    with open(CONFIG_FILE, "rb") as f:
-        return tomllib.load(f)
+    global _config_cache
+    if _config_cache is None:
+        with open(CONFIG_FILE, "rb") as f:
+            _config_cache = tomllib.load(f)
+    return _config_cache
 
 
 def bot_footer() -> str:

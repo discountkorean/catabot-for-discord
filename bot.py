@@ -3,6 +3,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 import logging
+import logging.handlers
 import os
 import sys
 import subprocess
@@ -28,7 +29,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s AEST [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8"),
         logging.StreamHandler(),
     ],
 )

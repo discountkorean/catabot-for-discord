@@ -151,8 +151,17 @@ def save_bot_state(data: dict):
 def _fetch_products_sync(url: str) -> list:
     try:
         r = requests.get(url, headers=HEADERS, timeout=15)
+        # password-protected stores return 200 with HTML, or redirect to /password
+        if r.status_code in (401, 403) or "password" in r.url:
+            return []
         r.raise_for_status()
-        return r.json().get("products", [])
+        data = r.json()
+        # some stores return HTML with a 200 during drops (not valid JSON)
+        if not isinstance(data, dict):
+            return []
+        return data.get("products", [])
+    except requests.HTTPError:
+        return []
     except Exception as e:
         log.error(f"Failed to fetch {url}: {e}")
         return []

@@ -354,10 +354,14 @@ class RestockCog(commands.Cog):
         if key not in self.guilds:
             self.guilds[key] = _default_guild()
         gs = self.guilds[key]
-        # Migrate legacy extra_stores format
+        # Migrate legacy extra_stores → stores
         if "extra_stores" in gs and "stores" not in gs:
-            gs["stores"] = {**load_config()["stores"], **gs.pop("extra_stores")}
+            gs["stores"] = gs.pop("extra_stores")
             save_guild_state(key, gs)
+        # Ensure all expected keys exist
+        gs.setdefault("stores", {})
+        gs.setdefault("notifications", {})
+        gs.setdefault("poll_interval", DEFAULT_POLL_INTERVAL)
         return gs
 
     def _guild_stores(self, guild_id: int) -> dict:

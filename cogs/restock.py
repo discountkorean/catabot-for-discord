@@ -324,23 +324,24 @@ def make_new_item_embed(store_name: str, store_url: str, variants: list) -> disc
 
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
+DEFAULT_POLL_INTERVAL = 300
+
 def _default_guild() -> dict:
     return {
         "alert_channel_id": None,
         "stores":           {},
         "notifications":    {},
+        "poll_interval":    DEFAULT_POLL_INTERVAL,
     }
 
 
 class RestockCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
-        self.bot           = bot
-        self.state         = load_state()
-        raw                = load_bot_state()
-        self.poll_interval: int = raw.get("poll_interval", load_config()["monitor"]["poll_interval"])
-
-        # Load all per-guild files from data/guilds/
-        self.guilds: dict = load_all_guilds()
+        self.bot        = bot
+        self.state      = load_state()
+        raw             = load_bot_state()
+        self.guilds: dict      = load_all_guilds()
+        self._last_polled: dict = {}   # guild_id_str → last poll timestamp
 
         # Detect legacy single-guild format and migrate in on_ready
         if not self.guilds and ("alert_channel_id" in raw or "guilds" in raw):
@@ -368,11 +369,18 @@ class RestockCog(commands.Cog):
             stores.update(gs.get("stores", {}))
         return stores
 
+    def _min_interval(self) -> int:
+        intervals = [
+            gs.get("poll_interval", DEFAULT_POLL_INTERVAL)
+            for gs in self.guilds.values()
+            if gs.get("alert_channel_id")
+        ]
+        return min(intervals) if intervals else DEFAULT_POLL_INTERVAL
+
     def persist(self, guild_id: int | str = None):
         """Save global bot state and optionally one guild, or all guilds."""
         raw = load_bot_state()
-        raw["poll_interval"] = self.poll_interval
-        for key in ("alert_channel_id", "extra_stores", "notifications", "guilds"):
+        for key in ("alert_channel_id", "extra_stores", "notifications", "guilds", "poll_interval"):
             raw.pop(key, None)
         save_bot_state(raw)
 
@@ -384,14 +392,32 @@ class RestockCog(commands.Cog):
 
     # ── Poll loop ─────────────────────────────────────────────────────────────
 
-    @tasks.loop(seconds=300)
+    @tasks.loop(seconds=60)
     async def poll(self):
-        if self.poll.seconds != self.poll_interval:
-            self.poll.change_interval(seconds=self.poll_interval)
+        # Adjust loop to minimum interval across all active guilds
+        min_iv = self._min_interval()
+        if self.poll.seconds != min_iv:
+            self.poll.change_interval(seconds=min_iv)
 
+        now        = datetime.now(ZoneInfo("UTC")).timestamp()
         all_stores = self._all_stores()
 
-        for store_name, url in all_stores.items():
+        # Determine which guilds are due for a poll this cycle
+        due_guilds = {
+            gid: gs for gid, gs in self.guilds.items()
+            if gs.get("alert_channel_id") and
+               now - self._last_polled.get(gid, 0) >= gs.get("poll_interval", DEFAULT_POLL_INTERVAL)
+        }
+
+        if not due_guilds:
+            return
+
+        # Collect stores needed by due guilds only
+        due_stores = {}
+        for gs in due_guilds.values():
+            due_stores.update(gs.get("stores", {}))
+
+        for store_name, url in due_stores.items():
             log.info(f"Checking {store_name}...")
             products = await fetch_products(url)
             if not products:
@@ -419,8 +445,8 @@ class RestockCog(commands.Cog):
             if not restocked and not new_items:
                 continue
 
-            # Route alerts to each guild that monitors this store
-            for guild_id_str, gs in self.guilds.items():
+            # Route alerts to each due guild that monitors this store
+            for guild_id_str, gs in due_guilds.items():
                 channel_id = gs.get("alert_channel_id")
                 if not channel_id:
                     continue
@@ -448,6 +474,10 @@ class RestockCog(commands.Cog):
                     log.info(f"NEW ITEM: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
         save_state(self.state)
+
+        # Stamp last polled time for all due guilds
+        for gid in due_guilds:
+            self._last_polled[gid] = now
 
     @poll.before_loop
     async def before_poll(self):
@@ -487,9 +517,10 @@ class RestockCog(commands.Cog):
             color=0x57F287 if running else 0xED4245,
             timestamp=datetime.now(ZoneInfo("UTC")),
         )
-        embed.add_field(name="State",    value="🟢 Running" if running else "🔴 Stopped",             inline=True)
-        embed.add_field(name="Interval", value=f"{self.poll_interval}s ({self.poll_interval // 60}m)", inline=True)
-        embed.add_field(name="Channel",  value=channel.mention if channel else "Not set",              inline=True)
+        interval = gs.get("poll_interval", DEFAULT_POLL_INTERVAL)
+        embed.add_field(name="State",    value="🟢 Running" if running else "🔴 Stopped",  inline=True)
+        embed.add_field(name="Interval", value=f"{interval}s ({interval // 60}m)",         inline=True)
+        embed.add_field(name="Channel",  value=channel.mention if channel else "Not set",  inline=True)
         embed.add_field(name="Stores",   value="\n".join(f"• {n}" for n in stores),                   inline=False)
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed)
@@ -639,20 +670,29 @@ class RestockCog(commands.Cog):
             self.poll.cancel()
             await interaction.followup.send("🔴 Tracker stopped (no active servers remaining).")
         else:
+            # Recalculate loop interval now this guild is inactive
+            new_min = self._min_interval()
+            if self.poll.is_running() and self.poll.seconds != new_min:
+                self.poll.change_interval(seconds=new_min)
             await interaction.followup.send("🔴 Alerts disabled for this server.")
 
-    @admin.command(name="interval", description="Set the global poll interval (min 60s, max 600s)")
+    @admin.command(name="interval", description="Set this server's poll interval (min 60s, max 600s)")
     @app_commands.describe(seconds="Interval in seconds (min 60, max 600)")
     async def admin_interval(self, interaction: discord.Interaction, seconds: int):
         await interaction.response.defer()
         if seconds < 60 or seconds > 600:
             await interaction.followup.send(f"❌ Interval must be between **60s** and **600s**. Got `{seconds}s`.")
             return
-        self.poll_interval = seconds
+        gs = self._guild(interaction.guild_id)
+        gs["poll_interval"] = seconds
         self.persist(interaction.guild_id)
-        if self.poll.is_running():
-            self.poll.change_interval(seconds=seconds)
-        await interaction.followup.send(f"✅ Poll interval updated to **{seconds}s** ({seconds // 60}m {seconds % 60}s).")
+
+        # Update the loop to the new minimum interval if needed
+        new_min = self._min_interval()
+        if self.poll.is_running() and self.poll.seconds != new_min:
+            self.poll.change_interval(seconds=new_min)
+
+        await interaction.followup.send(f"✅ Poll interval for this server updated to **{seconds}s** ({seconds // 60}m {seconds % 60}s).")
 
     @admin.command(name="add", description="Add a Shopify store to monitor")
     @app_commands.describe(store_name="Display name for the store", url="Store URL (e.g. https://www.houndarchives.com)")
@@ -898,6 +938,7 @@ class RestockCog(commands.Cog):
                     "alert_channel_id": legacy["alert_channel_id"],
                     "stores":           extra,
                     "notifications":    legacy.get("notifications", {}),
+                    "poll_interval":    legacy.get("poll_interval", DEFAULT_POLL_INTERVAL),
                 }
                 self.persist(guild_id)
                 log.info(f"Migrated legacy (flat) bot state to guild {guild_id}")

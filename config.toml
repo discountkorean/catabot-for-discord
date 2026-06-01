@@ -1,0 +1,27 @@
+# ==========================================
+#      SHOPIFY STOCK MONITOR — CONFIG
+# ==========================================
+# Use /stop then /start in Discord after making changes.
+
+[discord]
+# token loaded from .env → DISCORD_TOKEN
+activity_type = "Watching"   # options: watching, playing, listening, competing
+activity = "Restock Alerts 🔔"
+
+[monitor]
+poll_interval = 300  # seconds between each check (300 = 5 minutes)
+
+# Base list of stores. Use /addstore and /removestore in Discord to manage at runtime.
+# Format: "Display Name" = "https://store.com/products.json?limit=1000"
+[stores]
+"HOUND ARCHIVES"    = "https://www.houndarchives.com/products.json?limit=1000"
+"DRMERS CLUB"       = "https://www.drmersclub.com/products.json?limit=1000"
+"COMMON DIVISOR"    = "https://www.common-divisor.com/products.json?limit=1000"
+"SCXR"              = "https://secure.scxrofficial.com/products.json?limit=1000"
+"LOADING TO FUTURE" = "https://loadingtofuture.com/products.json?limit=1000"
+"BREATHE DIVINITY"  = "https://breathedivinity.com/products.json?limit=1000"
+"YOUNGLA"           = "https://www.youngla.com/products.json?limit=1000"
+"GYMSHARK"          = "https://gymshark.com/products.json?limit=1000"
+"SOULS DIARY"       = "https://soulsdiary.com/products.json?limit=1000"
+"LEFTFIELD"         = "https://leftfield.clothing/products.json?limit=1000"
+"COOL.SHIRTZ"       = "https://shirtz.cool/products.json?limit=1000"

@@ -322,6 +322,23 @@ def make_new_item_embed(store_name: str, store_url: str, variants: list) -> disc
     return embed
 
 
+def make_removed_embed(store_name: str, store_url: str, variants: list) -> discord.Embed:
+    first  = variants[0]
+    sizes  = ", ".join(v["variant_title"] for v in variants) or "N/A"
+    domain = _display_domain(store_url.split("/")[2])
+    embed  = discord.Embed(
+        title=f"🗑️ Item Removed: {first['title']}",
+        color=0x95a5a6,
+        timestamp=datetime.now(ZoneInfo("UTC")),
+    )
+    if first.get("image_url"):
+        embed.set_thumbnail(url=first["image_url"])
+    embed.add_field(name="Last Known Sizes", value=sizes,      inline=True)
+    embed.add_field(name="Store",            value=store_name, inline=True)
+    embed.set_footer(text=f"{bot_footer()} • {domain}")
+    return embed
+
+
 def make_sold_out_embed(store_name: str, store_url: str, variants: list) -> discord.Embed:
     first  = variants[0]
     sizes  = ", ".join(v["variant_title"] for v in variants)
@@ -456,7 +473,7 @@ class RestockCog(commands.Cog):
                 log.info(f"Seeded {store_name} ({len(current)} variants)")
                 continue
 
-            restocked, new_items, sold_out = {}, {}, {}
+            restocked, new_items, sold_out, removed = {}, {}, {}, {}
             for vid, info in current.items():
                 handle = info["handle"]
                 if vid not in previous:
@@ -466,9 +483,14 @@ class RestockCog(commands.Cog):
                 elif previous[vid].get("available", True) and not info["available"]:
                     sold_out.setdefault(handle, []).append(info)
 
+            # Detect fully removed products (variants in previous but not in current)
+            for vid, info in previous.items():
+                if vid not in current:
+                    removed.setdefault(info["handle"], []).append(info)
+
             self.state[url] = current
 
-            if not restocked and not new_items and not sold_out:
+            if not restocked and not new_items and not sold_out and not removed:
                 continue
 
             # Route alerts to each due guild that monitors this store
@@ -502,6 +524,10 @@ class RestockCog(commands.Cog):
                 for variants in sold_out.values():
                     await channel.send(embed=make_sold_out_embed(store_name, url, variants))
                     log.info(f"SOLD OUT: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
+
+                for variants in removed.values():
+                    await channel.send(embed=make_removed_embed(store_name, url, variants))
+                    log.info(f"REMOVED: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
         save_state(self.state)
 

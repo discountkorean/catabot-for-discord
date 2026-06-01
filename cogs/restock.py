@@ -756,18 +756,18 @@ class RestockCog(commands.Cog):
             await interaction.followup.send("❌ No stores to export.", ephemeral=True)
             return
 
-        import base64
-        code = base64.urlsafe_b64encode(json.dumps(stores).encode()).decode()
+        import base64, io
+        code       = base64.urlsafe_b64encode(json.dumps(stores).encode()).decode()
         store_list = "\n".join(f"• {name}" for name in stores)
         embed = discord.Embed(
-            title="📤 Store Export Code",
-            description=f"Use `/rst admin import [code]` on another server to clone these stores.\n\n**{len(stores)} store(s):**\n{store_list}",
+            title="📤 Store Export",
+            description=f"Use `/rst admin import` with the attached code file on another server.\n\n**{len(stores)} store(s):**\n{store_list}",
             color=0x5865F2,
             timestamp=datetime.now(ZoneInfo("UTC")),
         )
-        embed.add_field(name="Code", value=f"```{code}```", inline=False)
         embed.set_footer(text=bot_footer())
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        file = discord.File(io.BytesIO(code.encode()), filename="stores-export.txt")
+        await interaction.followup.send(embed=embed, file=file, ephemeral=True)
 
     @admin.command(name="import", description="Import a store list from an export code")
     @app_commands.describe(code="Export code from /rst admin export")

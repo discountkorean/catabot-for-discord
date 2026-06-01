@@ -518,7 +518,7 @@ class RestockCog(commands.Cog):
                     log.info(f"RESTOCK: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
                 for variants in new_items.values():
-                    await channel.send(embed=make_new_item_embed(store_name, url, variants))
+                    await channel.send(content=ping, embed=make_new_item_embed(store_name, url, variants))
                     log.info(f"NEW ITEM: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
                 for variants in sold_out.values():

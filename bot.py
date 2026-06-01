@@ -10,6 +10,12 @@ import subprocess
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 AEST = ZoneInfo("Australia/Sydney")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -90,5 +96,7 @@ async def cmd_restart(interaction: discord.Interaction):
 
 
 if __name__ == "__main__":
-    config = load_config()
-    bot.run(config["discord"]["token"], log_handler=None)
+    token = os.environ.get("DISCORD_TOKEN")
+    if not token:
+        raise RuntimeError("DISCORD_TOKEN not set — add it to .env")
+    bot.run(token, log_handler=None)

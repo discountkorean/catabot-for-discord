@@ -1,7 +1,0 @@
-2026-06-01 12:39:03,994 AEST [WARNING] PyNaCl is not installed, voice will NOT be supported
-2026-06-01 12:39:03,995 AEST [WARNING] davey is not installed, voice will NOT be supported
-2026-06-01 12:39:03,998 AEST [WARNING] Privileged message content intent is missing, commands may not work as expected.
-2026-06-01 12:39:03,998 AEST [INFO] logging in using static token
-2026-06-01 12:39:05,331 AEST [INFO] Slash commands synced
-2026-06-01 12:39:05,991 AEST [INFO] Shard ID None has connected to Gateway (Session ID: 4a676f07aeb22602087a0f188a822291).
-2026-06-01 12:39:08,031 AEST [INFO] Logged in as cata.ai#7892 (ID: 1510804130808074270)

@@ -3,4 +3,4 @@
 **/__pycache__/
 **/*.pyc
 logs/
-data/bot.pid
+data/

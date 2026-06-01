@@ -15,17 +15,17 @@ A Discord bot that monitors Shopify stores for restocks and new item drops, and 
 ### Requirements
 
 - Python 3.11+
-- `discord.py`
-- `requests`
-- `python-dotenv` (optional, for `.env` loading)
+- Dependencies listed in `requirements.txt` (`discord.py`, `requests`, `python-dotenv`, `tzdata`)
+
+On Windows, `start.bat` installs dependencies automatically before launching the bot. To install manually:
 
 ```
-pip install discord.py requests python-dotenv
+pip install -r requirements.txt
 ```
 
 ### Configuration
 
-1. Copy `.env.example` to `.env` and fill in your bot token:
+1. Create a `.env` file in the project root with your bot token:
 
 ```env
 DISCORD_TOKEN=your_token_here
@@ -46,11 +46,13 @@ poll_interval = 300  # seconds
 
 3. Run the bot:
 
+On Windows, double-click `start.bat` — it pulls the latest data, installs dependencies, and starts the bot in the background.
+
+To run directly:
+
 ```
 python bot.py
 ```
-
-Or use `start.bat` on Windows.
 
 ## Commands
 
@@ -87,8 +89,12 @@ Or use `start.bat` on Windows.
 ```
 catabot-for-discord/
 ├── bot.py              # Bot entry point
+├── requirements.txt    # Python dependencies
 ├── config.toml         # Stores, poll interval, version
 ├── .env                # Secret credentials (not committed)
+├── start.bat           # Windows launcher (installs deps + starts bot)
+├── stop.bat            # Windows stop helper
+├── restart.bat         # Windows restart helper
 ├── cogs/
 │   └── restock.py      # All monitoring logic and commands
 ├── data/               # Runtime state (gitignored)

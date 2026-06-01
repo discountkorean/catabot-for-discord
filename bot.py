@@ -53,70 +53,119 @@ class StockBot(commands.Bot):
         log.info(f"Logged in as {self.user} (ID: {self.user.id})")
 
 
+def _build_help_pages(is_admin: bool) -> list[discord.Embed]:
+    ts = datetime.now(ZoneInfo("UTC"))
+
+    p1 = discord.Embed(title="📖 cata.ai — Overview", color=0x5865F2, timestamp=ts)
+    p1.add_field(name="📊 Tracker (/rst)", value=(
+        "`/rst status` — Tracker state and store list\n"
+        "`/rst notify [store]` — Toggle restock pings for yourself\n"
+        "`/rst store [store]` — Store info and subscribers\n"
+        "`/rst user [user]` — Stores a user is subscribed to\n"
+        "`/rst search [query] [stores...]` — Search for a product"
+    ), inline=False)
+    p1.add_field(name="🔍 Help", value=(
+        "`/help general` — This overview\n"
+        "`/help rst` — Detailed /rst command list"
+        + ("\n`/help admin` — Admin commands\n`/help rst-admin` — /rst admin commands" if is_admin else "")
+    ), inline=False)
+    p1.set_footer(text=f"cata.ai  •  Page 1 of {4 if is_admin else 2}")
+
+    p2 = discord.Embed(title="📖 cata.ai — /rst Commands", color=0x5865F2, timestamp=ts)
+    p2.add_field(name="status", value="Show tracker state, poll interval, and monitored stores.", inline=False)
+    p2.add_field(name="notify [store]", value="Toggle restock ping notifications for yourself on a store.", inline=False)
+    p2.add_field(name="store [store]", value="Show store URL, subscribed users and roles.", inline=False)
+    p2.add_field(name="user [user]", value="Show all stores a user is subscribed to. Defaults to yourself.", inline=False)
+    p2.add_field(name="search [query] [stores...]", value="Search for a product by name across up to 5 stores.", inline=False)
+    p2.set_footer(text=f"cata.ai  •  Page 2 of {4 if is_admin else 2}")
+
+    pages = [p1, p2]
+
+    if is_admin:
+        p3 = discord.Embed(title="🔐 cata.ai — Admin Commands", color=0xEB459E, timestamp=ts)
+        p3.add_field(name="⚙️ Bot", value="`/restart` — Restart the bot process", inline=False)
+        p3.add_field(name="🔗 See also", value="Page 4 → `/rst admin` commands", inline=False)
+        p3.set_footer(text="cata.ai  •  Page 3 of 4  •  Admin only")
+
+        p4 = discord.Embed(title="🔐 cata.ai — /rst admin Commands", color=0xEB459E, timestamp=ts)
+        p4.add_field(name="Tracker Control", value=(
+            "`start [channel]` — Start monitoring\n"
+            "`stop` — Stop monitoring\n"
+            "`interval [seconds]` — Set poll interval (60–600s)"
+        ), inline=False)
+        p4.add_field(name="Store Management", value=(
+            "`add [name] [url]` — Add a store\n"
+            "`remove [store...]` — Remove up to 5 stores"
+        ), inline=False)
+        p4.add_field(name="Notifications", value=(
+            "`notify [store] [user/role]` — Toggle pings for any user or role"
+        ), inline=False)
+        p4.add_field(name="Debug", value=(
+            "`recent [store] [channel]` — Post most recently updated item\n"
+            "`alert [store] [channel]` — Send a fake restock alert for testing"
+        ), inline=False)
+        p4.set_footer(text="cata.ai  •  Page 4 of 4  •  Admin only")
+
+        pages += [p3, p4]
+
+    return pages
+
+
+class HelpPaginator(discord.ui.View):
+    def __init__(self, pages: list[discord.Embed], start: int = 0):
+        super().__init__(timeout=120)
+        self.pages = pages
+        self.page  = start
+        self._update_buttons()
+
+    def _update_buttons(self):
+        self.prev_btn.disabled = self.page == 0
+        self.next_btn.disabled = self.page == len(self.pages) - 1
+
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page -= 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.pages[self.page], view=self)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page += 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.pages[self.page], view=self)
+
+
 help_group = app_commands.Group(name="help", description="Command reference")
 
 bot = StockBot()
 
+
 @help_group.command(name="general", description="Show all public commands")
 async def help_general(interaction: discord.Interaction):
-    embed = discord.Embed(title="📖 cata.ai — Commands", color=0x5865F2, timestamp=datetime.now(ZoneInfo("UTC")))
-    embed.add_field(name="📊 Tracker", value=(
-        "`/rst status` — Show tracker state and monitored stores\n"
-        "`/rst notify [store]` — Toggle restock pings for yourself\n"
-        "`/rst store [store]` — Show store info and subscribers\n"
-        "`/rst user [user]` — Show a user's subscribed stores\n"
-        "`/rst search [query] [stores...]` — Search for a product"
-    ), inline=False)
-    embed.add_field(name="🔍 General", value="`/help general` — Show this message", inline=False)
-    embed.set_footer(text="cata.ai • Admin commands visible via /help admin")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    is_admin = interaction.user.guild_permissions.administrator
+    pages    = _build_help_pages(is_admin)
+    await interaction.response.send_message(embed=pages[0], view=HelpPaginator(pages, 0), ephemeral=True)
 
 
 @help_group.command(name="rst", description="Show all /rst commands")
 async def help_rst(interaction: discord.Interaction):
-    embed = discord.Embed(title="📖 cata.ai — /rst Commands", color=0x5865F2, timestamp=datetime.now(ZoneInfo("UTC")))
-    embed.add_field(name="📊 Tracker", value=(
-        "`/rst status` — Tracker state, interval, and store list\n"
-        "`/rst notify [store]` — Toggle restock pings for yourself\n"
-        "`/rst store [store]` — Store info and current subscribers\n"
-        "`/rst user [user]` — Stores a user is subscribed to\n"
-        "`/rst search [query] [stores...]` — Search for a product across stores"
-    ), inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    is_admin = interaction.user.guild_permissions.administrator
+    pages    = _build_help_pages(is_admin)
+    await interaction.response.send_message(embed=pages[1], view=HelpPaginator(pages, 1), ephemeral=True)
 
 
 @help_group.command(name="admin", description="Show all admin commands")
 @app_commands.checks.has_permissions(administrator=True)
 async def help_admin(interaction: discord.Interaction):
-    embed = discord.Embed(title="🔐 cata.ai — Admin Commands", color=0xEB459E, timestamp=datetime.now(ZoneInfo("UTC")))
-    embed.add_field(name="⚙️ Bot", value=(
-        "`/restart` — Restart the bot process"
-    ), inline=False)
-    embed.add_field(name="📋 For /rst admin commands", value="Use `/help rst-admin`", inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    pages = _build_help_pages(True)
+    await interaction.response.send_message(embed=pages[2], view=HelpPaginator(pages, 2), ephemeral=True)
 
 
 @help_group.command(name="rst-admin", description="Show all /rst admin commands")
 @app_commands.checks.has_permissions(administrator=True)
 async def help_rst_admin(interaction: discord.Interaction):
-    embed = discord.Embed(title="🔐 cata.ai — /rst admin Commands", color=0xEB459E, timestamp=datetime.now(ZoneInfo("UTC")))
-    embed.add_field(name="⚙️ Tracker Control", value=(
-        "`/rst admin start [channel]` — Start monitoring\n"
-        "`/rst admin stop` — Stop monitoring\n"
-        "`/rst admin interval [seconds]` — Set poll interval (60–600s)"
-    ), inline=False)
-    embed.add_field(name="🏪 Store Management", value=(
-        "`/rst admin add [name] [url]` — Add a store\n"
-        "`/rst admin remove [store...]` — Remove stores"
-    ), inline=False)
-    embed.add_field(name="🔔 Notifications", value=(
-        "`/rst admin notify [store] [user/role]` — Toggle pings for a user or role"
-    ), inline=False)
-    embed.add_field(name="🧪 Debug", value=(
-        "`/rst admin recent [store] [channel]` — Post most recent item\n"
-        "`/rst admin alert [store] [channel]` — Send fake restock alert"
-    ), inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    pages = _build_help_pages(True)
+    await interaction.response.send_message(embed=pages[3], view=HelpPaginator(pages, 3), ephemeral=True)
 
 
 @bot.tree.command(name="restart", description="Restart the bot process")

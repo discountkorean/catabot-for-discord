@@ -2,7 +2,6 @@ import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands
-import tomllib
 import logging
 import os
 import sys
@@ -36,10 +35,6 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-def load_config() -> dict:
-    with open(os.path.join(BASE_DIR, "config.toml"), "rb") as f:
-        return tomllib.load(f)
-
 
 class StockBot(commands.Bot):
     def __init__(self):
@@ -54,25 +49,31 @@ class StockBot(commands.Bot):
         log.info("Slash commands synced")
 
     async def on_ready(self):
-        config = load_config()
-        activity_text = config["discord"].get("activity", "Shopify stores")
-        activity_type = config["discord"].get("activity_type", "watching").lower()
-        activity_map = {
-            "watching":  discord.ActivityType.watching,
-            "playing":   discord.ActivityType.playing,
-            "listening": discord.ActivityType.listening,
-            "competing": discord.ActivityType.competing,
-        }
-        await self.change_presence(
-            activity=discord.Activity(
-                type=activity_map.get(activity_type, discord.ActivityType.watching),
-                name=activity_text,
-            )
-        )
         log.info(f"Logged in as {self.user} (ID: {self.user.id})")
 
 
 bot = StockBot()
+
+
+@bot.tree.command(name="help", description="Show all available commands")
+async def cmd_help(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📖 cata.ai — Commands",
+        color=0x5865F2,
+        timestamp=datetime.now(ZoneInfo("UTC")),
+    )
+    embed.add_field(name="📊 Tracker", value=(
+        "`/rst status` — Show tracker state and monitored stores\n"
+        "`/rst notify [store]` — Toggle restock pings for yourself\n"
+        "`/rst store [store]` — Show store info and subscribers\n"
+        "`/rst user [user]` — Show a user's subscribed stores\n"
+        "`/rst search [query] [stores...]` — Search for a product"
+    ), inline=False)
+    embed.add_field(name="🔍 General", value=(
+        "`/help` — Show this message"
+    ), inline=False)
+    embed.set_footer(text="cata.ai • Admin commands: /rst admin help")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="restart", description="Restart the bot process")
@@ -90,8 +91,8 @@ async def cmd_restart(interaction: discord.Interaction):
 
     async def _do_restart():
         await asyncio.sleep(1)
-        subprocess.Popen([sys.executable] + sys.argv)
-        await bot.close()
+        subprocess.Popen([sys.executable] + sys.argv, cwd=BASE_DIR)
+        os._exit(0)
 
     asyncio.create_task(_do_restart())
 

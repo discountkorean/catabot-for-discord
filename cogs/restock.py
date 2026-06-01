@@ -348,7 +348,7 @@ class RestockCog(commands.Cog):
         name="admin",
         description="Admin-only tracker commands",
         parent=tracker,
-        default_member_permissions=discord.Permissions(administrator=True),
+        default_permissions=discord.Permissions(administrator=True),
     )
 
     async def _store_autocomplete(self, interaction: discord.Interaction, current: str):
@@ -439,8 +439,7 @@ class RestockCog(commands.Cog):
             color=0x5865F2,
             timestamp=datetime.now(ZoneInfo("UTC")),
         )
-        embed.add_field(name="URL",    value=base_url,                                              inline=False)
-        embed.add_field(name="Source", value="Custom (runtime)" if is_custom else "config.toml",   inline=True)
+        embed.add_field(name="URL",    value=base_url, inline=False)
         embed.add_field(name="👤 Subscribed Users", value="\n".join(user_lines) if user_lines else "None", inline=False)
         embed.add_field(name="🏷️ Subscribed Roles", value="\n".join(role_lines) if role_lines else "None", inline=False)
         embed.set_footer(text=bot_footer())
@@ -706,6 +705,36 @@ class RestockCog(commands.Cog):
 
         await dest.send(embed=embed)
         await interaction.followup.send(f"✅ Posted most recent item from **{store_name}** to {dest.mention}.", ephemeral=True)
+
+    @admin.command(name="help", description="Show all admin commands")
+    async def admin_help(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="🔐 cata.ai — Admin Commands",
+            color=0xEB459E,
+            timestamp=datetime.now(ZoneInfo("UTC")),
+        )
+        embed.add_field(name="⚙️ Tracker Control", value=(
+            "`/rst admin start [channel]` — Start monitoring\n"
+            "`/rst admin stop` — Stop monitoring\n"
+            "`/rst admin interval [seconds]` — Set poll interval (60–600s)"
+        ), inline=False)
+        embed.add_field(name="🏪 Store Management", value=(
+            "`/rst admin add [name] [url]` — Add a store\n"
+            "`/rst admin remove [store...]` — Remove stores"
+        ), inline=False)
+        embed.add_field(name="🔔 Notifications", value=(
+            "`/rst admin notify [store] [user/role]` — Toggle pings for a user or role"
+        ), inline=False)
+        embed.add_field(name="🧪 Debug", value=(
+            "`/rst admin recent [store] [channel]` — Post most recent item\n"
+            "`/rst admin alert [store] [channel]` — Send fake restock alert\n"
+            "`/rst admin help` — Show this message"
+        ), inline=False)
+        embed.add_field(name="🔁 Bot", value=(
+            "`/restart` — Restart the bot process"
+        ), inline=False)
+        embed.set_footer(text=bot_footer())
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @admin.command(name="alert", description="Send a fake restock alert to test ping notifications")
     @app_commands.describe(

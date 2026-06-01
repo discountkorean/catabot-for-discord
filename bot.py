@@ -1,7 +1,7 @@
 import asyncio
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 import logging
 import os
 import sys
@@ -34,6 +34,42 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
+
+def _git_pull_data():
+    """Pull latest data from private repo. Runs synchronously at startup."""
+    if not os.path.isdir(os.path.join(DATA_DIR, ".git")):
+        log.warning("data/ is not a git repo — skipping pull")
+        return
+    result = subprocess.run(
+        ["git", "pull", "--ff-only"],
+        cwd=DATA_DIR,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        log.info(f"Data pull: {result.stdout.strip() or 'already up to date'}")
+    else:
+        log.warning(f"Data pull failed: {result.stderr.strip()}")
+
+
+def _git_push_data():
+    """Commit and push any changed data files. Runs in a thread."""
+    if not os.path.isdir(os.path.join(DATA_DIR, ".git")):
+        return
+    subprocess.run(["git", "add", "."],           cwd=DATA_DIR, capture_output=True)
+    result = subprocess.run(
+        ["git", "commit", "-m", f"auto-sync {datetime.now(ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S')} UTC"],
+        cwd=DATA_DIR, capture_output=True, text=True,
+    )
+    if "nothing to commit" in result.stdout:
+        return  # No changes
+    push = subprocess.run(["git", "push"], cwd=DATA_DIR, capture_output=True, text=True)
+    if push.returncode == 0:
+        log.info("Data synced to remote.")
+    else:
+        log.warning(f"Data push failed: {push.stderr.strip()}")
 
 
 class StockBot(commands.Bot):
@@ -44,6 +80,8 @@ class StockBot(commands.Bot):
     async def setup_hook(self):
         with open(PID_FILE, "w") as f:
             f.write(str(os.getpid()))
+        # Pull latest data before loading state
+        await asyncio.to_thread(_git_pull_data)
         self.tree.add_command(help_group)
         await self.load_extension("cogs.restock")
         await self.tree.sync()
@@ -51,6 +89,12 @@ class StockBot(commands.Bot):
 
     async def on_ready(self):
         log.info(f"Logged in as {self.user} (ID: {self.user.id})")
+        if not self.sync_data_task.is_running():
+            self.sync_data_task.start()
+
+    @tasks.loop(minutes=5)
+    async def sync_data_task(self):
+        await asyncio.to_thread(_git_push_data)
 
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         msg = "❌ An unexpected error occurred. Please try again."

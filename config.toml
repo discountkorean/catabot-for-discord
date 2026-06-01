@@ -4,12 +4,10 @@
 # Use /stop then /start in Discord after making changes.
 
 [bot]
-version = "1.0.0"
+version = "1.0.1"
 
 [discord]
 # token loaded from .env → DISCORD_TOKEN
-activity_type = "Watching"   # options: watching, playing, listening, competing
-activity = "Restock Alerts 🔔"
 
 [monitor]
 poll_interval = 300  # seconds between each check (300 = 5 minutes)

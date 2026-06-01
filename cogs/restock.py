@@ -361,7 +361,7 @@ def make_sold_out_embed(store_name: str, store_url: str, variants: list) -> disc
 
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
-DEFAULT_POLL_INTERVAL = 300
+DEFAULT_POLL_INTERVAL = 60
 
 def _default_guild() -> dict:
     return {

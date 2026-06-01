@@ -10,6 +10,6 @@ version = "1.0.2"
 # token loaded from .env → DISCORD_TOKEN
 
 [monitor]
-poll_interval = 300  # seconds between each check (300 = 5 minutes)
+poll_interval = 60  # seconds between each check (default 60s)
 
 # Stores are managed per-server via /rst admin add and /rst admin remove.

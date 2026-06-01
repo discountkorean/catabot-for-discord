@@ -784,17 +784,24 @@ class RestockCog(commands.Cog):
             return
 
         gs = self._guild(interaction.guild_id)
-        existing  = gs.get("stores", {})
-        added     = {k: v for k, v in stores.items() if k not in existing}
-        skipped   = [k for k in stores if k in existing]
+        existing      = gs.get("stores", {})
+        existing_urls = set(existing.values())
+
+        added, skipped = {}, []
+        for name, url in stores.items():
+            if name in existing or url in existing_urls:
+                skipped.append(name)
+            else:
+                added[name] = url
+                existing_urls.add(url)
 
         gs["stores"].update(added)
         self.persist(interaction.guild_id)
 
         lines = []
         if added:   lines.append(f"✅ Imported {len(added)} store(s): " + ", ".join(f"**{n}**" for n in added))
-        if skipped: lines.append(f"⏭️ Skipped {len(skipped)} already present: " + ", ".join(f"**{n}**" for n in skipped))
-        await interaction.followup.send("\n".join(lines), ephemeral=True)
+        if skipped: lines.append(f"⏭️ Skipped {len(skipped)} (already present by name or URL): " + ", ".join(f"**{n}**" for n in skipped))
+        await interaction.followup.send("\n".join(lines) or "No stores imported.", ephemeral=True)
 
     @admin.command(name="remove", description="Remove one or more stores from monitoring")
     @app_commands.describe(

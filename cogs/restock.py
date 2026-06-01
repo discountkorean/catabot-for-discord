@@ -607,7 +607,12 @@ class RestockCog(commands.Cog):
     @app_commands.describe(store_name="Display name for the store", url="Shopify products.json URL")
     async def admin_add(self, interaction: discord.Interaction, store_name: str, url: str):
         await interaction.response.defer()
-        gs  = self._guild(interaction.guild_id)
+        gs = self._guild(interaction.guild_id)
+
+        # Ensure scheme is present
+        if not url.startswith("http://") and not url.startswith("https://"):
+            url = "https://" + url
+
         url = url.split("?")[0].rstrip("/") + "?limit=1000"
         if not url.endswith("products.json?limit=1000"):
             url = url.rstrip("/") + "/products.json?limit=1000"

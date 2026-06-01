@@ -52,6 +52,20 @@ class StockBot(commands.Bot):
     async def on_ready(self):
         log.info(f"Logged in as {self.user} (ID: {self.user.id})")
 
+    async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        msg = "❌ An unexpected error occurred. Please try again."
+        if isinstance(error, app_commands.MissingPermissions):
+            msg = "❌ You don't have permission to use this command."
+        else:
+            log.error(f"Unhandled app command error in /{interaction.command.qualified_name if interaction.command else '?'}: {error}", exc_info=error)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except Exception:
+            pass
+
 
 def _build_help_pages(is_admin: bool) -> list[discord.Embed]:
     ts = datetime.now(ZoneInfo("UTC"))

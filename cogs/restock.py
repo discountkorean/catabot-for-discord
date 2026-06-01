@@ -278,11 +278,10 @@ def make_new_item_embed(store_name: str, store_url: str, variants: list) -> disc
 
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
-# Default guild state template
 def _default_guild() -> dict:
     return {
         "alert_channel_id": None,
-        "extra_stores":     {},
+        "stores":           {},
         "notifications":    {},
     }
 
@@ -306,16 +305,21 @@ class RestockCog(commands.Cog):
     def _guild(self, guild_id: int) -> dict:
         key = str(guild_id)
         if key not in self.guilds:
-            self.guilds[key] = {"alert_channel_id": None, "extra_stores": {}, "notifications": {}}
-        return self.guilds[key]
+            self.guilds[key] = _default_guild()
+        gs = self.guilds[key]
+        # Migrate legacy extra_stores format
+        if "extra_stores" in gs and "stores" not in gs:
+            gs["stores"] = {**load_config()["stores"], **gs.pop("extra_stores")}
+            save_guild_state(key, gs)
+        return gs
 
     def _guild_stores(self, guild_id: int) -> dict:
-        return {**load_config()["stores"], **self._guild(guild_id)["extra_stores"]}
+        return self._guild(guild_id).get("stores", {})
 
     def _all_stores(self) -> dict:
-        stores = dict(load_config()["stores"])
+        stores = {}
         for gs in self.guilds.values():
-            stores.update(gs.get("extra_stores", {}))
+            stores.update(gs.get("stores", {}))
         return stores
 
     def persist(self, guild_id: int | str = None):
@@ -339,8 +343,7 @@ class RestockCog(commands.Cog):
         if self.poll.seconds != self.poll_interval:
             self.poll.change_interval(seconds=self.poll_interval)
 
-        config_stores = load_config()["stores"]
-        all_stores    = self._all_stores()
+        all_stores = self._all_stores()
 
         for store_name, url in all_stores.items():
             log.info(f"Checking {store_name}...")
@@ -380,8 +383,7 @@ class RestockCog(commands.Cog):
                     continue
 
                 # Only alert if this store is in this guild's store list
-                guild_stores = {**config_stores, **gs.get("extra_stores", {})}
-                if store_name not in guild_stores:
+                if store_name not in gs.get("stores", {}):
                     continue
 
                 notifs = gs.get("notifications", {}).get(store_name, {})
@@ -488,8 +490,7 @@ class RestockCog(commands.Cog):
         store_url = stores[store_name]
         domain    = _display_domain(store_url.split("/")[2])
         base_url  = f"https://{domain}"
-
-        notifs = gs["notifications"].get(store_name, {})
+        notifs    = gs["notifications"].get(store_name, {})
         if isinstance(notifs, list):
             notifs = {"users": notifs, "roles": []}
 
@@ -559,6 +560,11 @@ class RestockCog(commands.Cog):
         gs            = self._guild(interaction.guild_id)
         alert_channel = channel or interaction.channel
         gs["alert_channel_id"] = alert_channel.id
+
+        # Seed config.toml stores into guild on first setup
+        if not gs.get("stores"):
+            gs["stores"] = dict(load_config()["stores"])
+
         self.persist(interaction.guild_id)
 
         if not self.poll.is_running():
@@ -616,7 +622,7 @@ class RestockCog(commands.Cog):
         url = url.split("?")[0].rstrip("/") + "?limit=1000"
         if not url.endswith("products.json?limit=1000"):
             url = url.rstrip("/") + "/products.json?limit=1000"
-        gs["extra_stores"][store_name] = url
+        gs["stores"][store_name] = url
         self.persist(interaction.guild_id)
         await interaction.followup.send(f"✅ Added **{store_name}**\n`{url}`")
 
@@ -633,16 +639,13 @@ class RestockCog(commands.Cog):
                            store4: str = None, store5: str = None):
         await interaction.response.defer()
         gs            = self._guild(interaction.guild_id)
-        names         = [s for s in [store1, store2, store3, store4, store5] if s]
-        config_stores = load_config()["stores"]
-        removed, in_config, not_found = [], [], []
+        names                  = [s for s in [store1, store2, store3, store4, store5] if s]
+        removed, not_found     = [], []
 
         for name in names:
-            if name in gs["extra_stores"]:
-                del gs["extra_stores"][name]
+            if name in gs["stores"]:
+                del gs["stores"][name]
                 removed.append(name)
-            elif name in config_stores:
-                in_config.append(name)
             else:
                 not_found.append(name)
 
@@ -650,9 +653,8 @@ class RestockCog(commands.Cog):
             self.persist(interaction.guild_id)
 
         lines = []
-        if removed:   lines.append("✅ Removed: "                             + ", ".join(f"**{n}**" for n in removed))
-        if in_config: lines.append("⚠️ In `config.toml` (remove manually): " + ", ".join(f"**{n}**" for n in in_config))
-        if not_found: lines.append("❌ Not found: "                           + ", ".join(f"**{n}**" for n in not_found))
+        if removed:   lines.append("✅ Removed: "   + ", ".join(f"**{n}**" for n in removed))
+        if not_found: lines.append("❌ Not found: " + ", ".join(f"**{n}**" for n in not_found))
         await interaction.followup.send("\n".join(lines))
 
     @admin.command(name="notify", description="Toggle restock ping notifications for a user or role")
@@ -835,18 +837,36 @@ class RestockCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        # Migrate legacy single-guild bot_state format
+        # Migrate legacy bot_state formats
         if hasattr(self, "_legacy_state") and self.bot.guilds:
-            legacy = self._legacy_state
+            legacy   = self._legacy_state
+            guild_id = str(self.bot.guilds[0].id)
+
+            # Format A: flat single-guild (alert_channel_id at root)
             if legacy.get("alert_channel_id") and not self.guilds:
-                guild_id = str(self.bot.guilds[0].id)
+                config_stores = load_config()["stores"]
+                extra         = legacy.get("extra_stores", {})
                 self.guilds[guild_id] = {
-                    "alert_channel_id": legacy.get("alert_channel_id"),
-                    "extra_stores":     legacy.get("extra_stores", {}),
+                    "alert_channel_id": legacy["alert_channel_id"],
+                    "stores":           {**config_stores, **extra},
                     "notifications":    legacy.get("notifications", {}),
                 }
                 self.persist(guild_id)
-                log.info(f"Migrated legacy bot state to guild {guild_id}")
+                log.info(f"Migrated legacy (flat) bot state to guild {guild_id}")
+
+            # Format B: guilds nested dict in bot_state.json
+            elif "guilds" in legacy and not self.guilds:
+                config_stores = load_config()["stores"]
+                for gid, gs in legacy["guilds"].items():
+                    extra = gs.get("extra_stores", {})
+                    self.guilds[gid] = {
+                        "alert_channel_id": gs.get("alert_channel_id"),
+                        "stores":           {**config_stores, **extra},
+                        "notifications":    gs.get("notifications", {}),
+                    }
+                    self.persist(gid)
+                log.info(f"Migrated nested guilds dict to per-folder format ({len(legacy['guilds'])} guilds)")
+
             del self._legacy_state
 
         # Resume poll if any guild has an active channel

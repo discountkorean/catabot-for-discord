@@ -142,10 +142,13 @@ def _build_help_pages(is_admin: bool) -> list[discord.Embed]:
 
     p1 = discord.Embed(title="📖 cata.ai — Overview", color=0x5865F2, timestamp=ts)
     p1.add_field(name="📊 Tracker (/rst)", value=(
-        "`/rst status` — Tracker state and store list\n"
-        "`/rst notify [store]` — Toggle restock pings for yourself\n"
-        "`/rst store [store]` — Store info and subscribers\n"
-        "`/rst user [user]` — Stores a user is subscribed to\n"
+        "`/rst status` — Tracker state, stores, and per-store channels\n"
+        "`/rst subscribe` — Subscribe to alerts with optional filters\n"
+        "`/rst unsubscribe` — Remove a subscription by ID\n"
+        "`/rst subscriptions` — List your active subscriptions\n"
+        "`/rst store [store]` — Store info, channel, and subscribers\n"
+        "`/rst user [user]` — A user's subscriptions\n"
+        "`/rst catalog [store]` — Browse all products with stock status\n"
         "`/rst search [query] [stores...]` — Search for a product"
     ), inline=False)
     p1.add_field(name="🔍 Help", value=(
@@ -156,10 +159,17 @@ def _build_help_pages(is_admin: bool) -> list[discord.Embed]:
     p1.set_footer(text=f"cata.ai  •  Page 1 of {4 if is_admin else 2}")
 
     p2 = discord.Embed(title="📖 cata.ai — /rst Commands", color=0x5865F2, timestamp=ts)
-    p2.add_field(name="status", value="Show tracker state, poll interval, and monitored stores.", inline=False)
-    p2.add_field(name="notify [store]", value="Toggle restock ping notifications for yourself on a store.", inline=False)
-    p2.add_field(name="store [store]", value="Show store URL, subscribed users and roles.", inline=False)
-    p2.add_field(name="user [user]", value="Show all stores a user is subscribed to. Defaults to yourself.", inline=False)
+    p2.add_field(name="status", value="Show tracker state, poll interval, stores, and per-store channel overrides.", inline=False)
+    p2.add_field(name="subscribe [store] [names] [sizes]", value=(
+        "Subscribe to restock alerts. All filters optional.\n"
+        "**names** — comma-separated keywords, item must contain ALL (AND logic)\n"
+        "**sizes** — comma-separated sizes, item must match ANY (fuzzy: S/Small/SMALL all match)"
+    ), inline=False)
+    p2.add_field(name="unsubscribe <id>", value="Remove one of your subscriptions by its ID.", inline=False)
+    p2.add_field(name="subscriptions [user]", value="List your active subscriptions with filters and IDs.", inline=False)
+    p2.add_field(name="store [store]", value="Show store URL, alert channel, subscribed users and roles.", inline=False)
+    p2.add_field(name="user [user]", value="Show a user's subscriptions. Defaults to yourself.", inline=False)
+    p2.add_field(name="catalog [store]", value="Paginated product list with stock status (🟢 full / 🟠 partial / 🔴 sold out) and price. Sorted newest first.", inline=False)
     p2.add_field(name="search [query] [stores...]", value="Search for a product by name across up to 5 stores.", inline=False)
     p2.set_footer(text=f"cata.ai  •  Page 2 of {4 if is_admin else 2}")
 
@@ -173,16 +183,20 @@ def _build_help_pages(is_admin: bool) -> list[discord.Embed]:
 
         p4 = discord.Embed(title="🔐 cata.ai — /rst admin Commands", color=0xEB459E, timestamp=ts)
         p4.add_field(name="Tracker Control", value=(
-            "`start [channel]` — Start monitoring\n"
-            "`stop` — Stop monitoring\n"
+            "`start [channel]` — Start monitoring and set default alert channel\n"
+            "`stop` — Stop monitoring for this server\n"
             "`interval [seconds]` — Set poll interval (60–600s)"
         ), inline=False)
         p4.add_field(name="Store Management", value=(
-            "`add [name] [url]` — Add a store\n"
-            "`remove [store...]` — Remove up to 5 stores"
+            "`add [name] [url]` — Add a Shopify store (auto-discovers endpoint)\n"
+            "`remove [store...]` — Remove up to 5 stores\n"
+            "`channel [store] [channel]` — Set a dedicated channel, thread, or forum for a store\n"
+            "`export` — Export store list as a shareable code\n"
+            "`import [code]` — Import a store list from an export code"
         ), inline=False)
-        p4.add_field(name="Notifications", value=(
-            "`notify [store] [user/role]` — Toggle pings for any user or role"
+        p4.add_field(name="Subscriptions", value=(
+            "`subscribe [target] [store] [names] [sizes]` — Create a filtered subscription for a user or role\n"
+            "`unsubscribe <id>` — Remove any subscription by ID"
         ), inline=False)
         p4.add_field(name="Debug", value=(
             "`recent [store] [channel]` — Post most recently updated item\n"

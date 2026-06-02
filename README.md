@@ -7,8 +7,12 @@ A Discord bot that monitors Shopify stores for restocks, new drops, sold out and
 - Polls Shopify `products.json` endpoints on a configurable per-server interval
 - Detects restocks, new items, sold out, and removed products
 - Filtered subscriptions — subscribe by store, product name keywords, and/or size
-- Fuzzy size matching: XS / XSMALL / x-small / extra-small all match the same
+- Fuzzy size matching: XS / XSMALL / x-small all resolve to the same canonical size
 - Multi-keyword name filtering with AND logic (item must contain all keywords)
+- Per-store channel routing — send alerts to specific channels, threads, or forums
+- Forum support — auto-creates a persistent post per store, replies into it
+- Mass drop aggregation — collapses large drops (>5 items) into a single embed and ping
+- Paginated product catalog with stock status per item
 - Auto-discovers Shopify endpoints from human-friendly URLs
 - Silently skips password-protected or unreachable stores
 - Full multi-server support — each server manages its own stores and settings
@@ -50,52 +54,55 @@ python bot.py     # Direct
 
 | Command | Description |
 |---|---|
-| `/rst status` | Show tracker state, interval, and monitored stores |
-| `/rst subscribe [store] [names] [sizes]` | Subscribe to restock alerts with optional filters |
-| `/rst unsubscribe <id>` | Remove one of your subscriptions by ID |
+| `/rst status` | Tracker state, stores, and per-store channel overrides |
+| `/rst subscribe [store] [names] [sizes]` | Subscribe to alerts with optional filters |
+| `/rst unsubscribe <id>` | Remove a subscription by ID |
 | `/rst subscriptions [user]` | List your active subscriptions |
-| `/rst store [store]` | Show store info and all current subscribers |
-| `/rst user [user]` | Show a user's subscriptions |
+| `/rst store [store]` | Store info, alert channel, and subscribers |
+| `/rst user [user]` | A user's subscriptions |
+| `/rst catalog [store]` | Browse all products with stock status and price |
 | `/rst search [query] [stores...]` | Search for a product across stores |
 
 #### `/rst subscribe` filter options
 
-All parameters are optional. Omitting all creates a catch-all subscription for every item at every store.
+All parameters optional — omitting all subscribes to everything.
 
 | Parameter | Example | Behaviour |
 |---|---|---|
 | `store` | `store:HOUND ARCHIVES` | Only notify for items from this store |
-| `names` | `names:black,zip-up` | Item title must contain **all** keywords (AND logic) |
-| `sizes` | `sizes:small,xs` | Item must match **any** of the listed sizes (OR logic) |
+| `names` | `names:black,zip-up` | Item must contain **all** keywords (AND logic) |
+| `sizes` | `sizes:small,xs` | Item must match **any** size (OR logic, fuzzy) |
 
-Size matching is fuzzy — `small`, `SMALL`, `Sm`, and `S` all resolve to the same canonical size.
+#### `/rst catalog` legend
+
+🟢 All sizes in stock — 🟠 Some sizes available — 🔴 Sold out
 
 ### Admin (`/rst admin`)
 
-> Requires Administrator permission. Hidden from non-admins.
+> Requires Administrator permission.
 
 | Command | Description |
 |---|---|
-| `/rst admin start [channel]` | Start monitoring and set the alert channel |
+| `/rst admin start [channel]` | Start monitoring and set the default alert channel |
 | `/rst admin stop` | Stop monitoring for this server |
-| `/rst admin interval [seconds]` | Set poll interval for this server (60–600s) |
-| `/rst admin add [name] [url]` | Add a Shopify store (auto-discovers endpoint) |
+| `/rst admin interval [seconds]` | Set poll interval (60–600s) |
+| `/rst admin add [name] [url]` | Add a Shopify store |
 | `/rst admin remove [store...]` | Remove up to 5 stores |
-| `/rst admin subscribe [user/role] [store] [names] [sizes]` | Create a filtered subscription for any user or role |
+| `/rst admin channel [store] [channel]` | Set a dedicated channel, thread, or forum for a store |
+| `/rst admin subscribe [target] [store] [names] [sizes]` | Create a filtered subscription for a user or role |
 | `/rst admin unsubscribe <id>` | Remove any subscription by ID |
 | `/rst admin recent [store] [channel]` | Post the most recently updated item |
 | `/rst admin alert [store] [channel]` | Send a fake restock alert for testing |
 | `/rst admin export` | Export store list as a shareable code |
 | `/rst admin import [code]` | Import a store list from an export code |
 
-### Help
+#### Per-store channel routing
 
-| Command | Description |
-|---|---|
-| `/help general` | All public commands |
-| `/help rst` | Detailed /rst command list |
-| `/help admin` | Admin commands (admin only) |
-| `/help rst-admin` | /rst admin commands (admin only) |
+`/rst admin channel` accepts a text channel, thread, or forum:
+- **Text channel / Thread** — alerts sent directly
+- **Forum** — bot creates a `{Store} Updates` post on first alert and replies into it
+
+Omit the channel argument to revert a store to the server default.
 
 ### Bot
 
@@ -105,18 +112,19 @@ Size matching is fuzzy — `small`, `SMALL`, `Sm`, and `S` all resolve to the sa
 
 ## Alert Types
 
-| Alert | Pings subscribers? |
-|---|---|
-| 🔔 Back in Stock | ✅ Yes |
-| 🆕 New Item | ✅ Yes |
-| 🔴 Sold Out | ❌ No |
-| 🗑️ Item Removed | ❌ No |
+| Alert | Pings subscribers? | Notes |
+|---|---|---|
+| 🔔 Back in Stock | ✅ Yes | |
+| 🆕 New Item | ✅ Yes | |
+| 📦 Mass Drop | ✅ Yes (once) | Triggered when >5 items drop in one cycle |
+| 🔴 Sold Out | ❌ No | |
+| 🗑️ Item Removed | ❌ No | |
 
 ## Project Structure
 
 ```
 catabot-for-discord/
-├── bot.py              # Bot entry point
+├── bot.py              # Bot entry point and help pages
 ├── requirements.txt    # Python dependencies
 ├── config.toml         # Version and default poll interval
 ├── .env                # Secret credentials (not committed)

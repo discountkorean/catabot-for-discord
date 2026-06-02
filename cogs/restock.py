@@ -1054,6 +1054,14 @@ class RestockCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
+        # Purge stale name-keyed entries from stock_state (legacy format pre URL-keying)
+        stale_keys = [k for k in self.state if not k.startswith("http")]
+        if stale_keys:
+            for k in stale_keys:
+                del self.state[k]
+            save_state(self.state)
+            log.info(f"Purged {len(stale_keys)} stale stock state entries")
+
         # Migrate legacy bot_state formats
         if hasattr(self, "_legacy_state") and self.bot.guilds:
             legacy   = self._legacy_state

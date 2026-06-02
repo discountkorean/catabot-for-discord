@@ -109,7 +109,7 @@ class SearchPaginator(discord.ui.View):
         try:
             product = await asyncio.to_thread(
                 lambda: _normalize_product_js(
-                    requests.get(f"{base}/products/{r.handle}.js", headers=HEADERS, timeout=10).json()
+                    requests.Session().get(f"{base}/products/{r.handle}.js", headers=HEADERS, timeout=10).json()
                 )
             )
         except Exception:
@@ -347,7 +347,12 @@ BOT_STATE_FILE = os.path.join(DATA_DIR, "bot_state.json")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+HEADERS = {
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Cache-Control":   "no-cache, no-store, must-revalidate",
+    "Pragma":          "no-cache",
+    "Expires":         "0",
+}
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
@@ -446,38 +451,40 @@ def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> list:
     next_url: str | None = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
     results = []
 
-    while next_url:
-        try:
-            r = requests.get(next_url, headers=HEADERS, timeout=15)
-            if r.status_code == 429:
-                time.sleep(5)
-                continue
-            if r.status_code in (401, 403) or "password" in r.url:
-                break
-            r.raise_for_status()
-            data = r.json()
-            if not isinstance(data, dict):
-                break
-            batch = data.get(key, [])
-            results.extend(batch)
-
-            # Follow Shopify's cursor-based next-page link
-            next_url = None
-            link_header = r.headers.get("Link", "")
-            for part in link_header.split(","):
-                if 'rel="next"' in part:
-                    m = re.search(r"<([^>]+)>", part)
-                    if m:
-                        next_url = m.group(1)
+    with requests.Session() as session:
+        session.headers.update(HEADERS)
+        while next_url:
+            try:
+                r = session.get(next_url, timeout=15)
+                if r.status_code == 429:
+                    time.sleep(5)
+                    continue
+                if r.status_code in (401, 403) or "password" in r.url:
                     break
+                r.raise_for_status()
+                data = r.json()
+                if not isinstance(data, dict):
+                    break
+                batch = data.get(key, [])
+                results.extend(batch)
 
-            if next_url:
-                time.sleep(delay)
-        except requests.HTTPError:
-            break
-        except Exception as e:
-            log.error(f"Failed to fetch {next_url}: {e}")
-            break
+                # Follow Shopify's cursor-based next-page link
+                next_url = None
+                link_header = r.headers.get("Link", "")
+                for part in link_header.split(","):
+                    if 'rel="next"' in part:
+                        m = re.search(r"<([^>]+)>", part)
+                        if m:
+                            next_url = m.group(1)
+                        break
+
+                if next_url:
+                    time.sleep(delay)
+            except requests.HTTPError:
+                break
+            except Exception as e:
+                log.error(f"Failed to fetch {next_url}: {e}")
+                break
     return results
 
 
@@ -495,17 +502,19 @@ def _normalize_product_js(p: dict) -> dict:
 def _fetch_watched_handles_sync(base: str, handles: list[str]) -> list:
     """Fetch a list of product handles via /products/{handle}.js. Returns normalized product dicts."""
     products = []
-    for handle in handles:
-        try:
-            r = requests.get(f"{base}/products/{handle}.js", headers=HEADERS, timeout=10)
-            if r.status_code == 404:
-                products.append({"handle": handle, "_removed": True})
-                continue
-            if not r.ok:
-                continue
-            products.append(_normalize_product_js(r.json()))
-        except Exception as e:
-            log.error(f"Failed to fetch watched handle {handle}: {e}")
+    with requests.Session() as session:
+        session.headers.update(HEADERS)
+        for handle in handles:
+            try:
+                r = session.get(f"{base}/products/{handle}.js", timeout=10)
+                if r.status_code == 404:
+                    products.append({"handle": handle, "_removed": True})
+                    continue
+                if not r.ok:
+                    continue
+                products.append(_normalize_product_js(r.json()))
+            except Exception as e:
+                log.error(f"Failed to fetch watched handle {handle}: {e}")
     return products
 
 
@@ -515,41 +524,41 @@ def _search_suggest_sync(base: str, query: str, limit: int = 10) -> list:
     full variant data via /products/{handle}.js. Returns a list of product dicts
     in the same shape as products.json items.
     """
-    try:
-        r = requests.get(
-            f"{base}/search/suggest.json",
-            params={
-                "q": query,
-                "resources[type]": "product",
-                "resources[limit]": limit,
-                "resources[options][unavailable_products]": "show",
-                "resources[options][fields]": "title,variants.title,vendor",
-            },
-            headers=HEADERS,
-            timeout=10,
-        )
-        if not r.ok:
-            return []
-        handles = [
-            p["handle"]
-            for p in r.json().get("resources", {}).get("results", {}).get("products", [])
-            if p.get("handle")
-        ]
-    except Exception as e:
-        log.error(f"suggest failed for {base}: {e}")
-        return []
-
-    products = []
-    for handle in handles:
+    with requests.Session() as session:
+        session.headers.update(HEADERS)
         try:
-            rp = requests.get(f"{base}/products/{handle}.js", headers=HEADERS, timeout=10)
-            if not rp.ok:
-                continue
-            p = rp.json()
-            products.append(_normalize_product_js(p))
+            r = session.get(
+                f"{base}/search/suggest.json",
+                params={
+                    "q": query,
+                    "resources[type]": "product",
+                    "resources[limit]": limit,
+                    "resources[options][unavailable_products]": "show",
+                    "resources[options][fields]": "title,variants.title,vendor",
+                },
+                timeout=10,
+            )
+            if not r.ok:
+                return []
+            handles = [
+                p["handle"]
+                for p in r.json().get("resources", {}).get("results", {}).get("products", [])
+                if p.get("handle")
+            ]
         except Exception as e:
-            log.error(f"product .js fetch failed for {base}/products/{handle}: {e}")
-    return products
+            log.error(f"suggest failed for {base}: {e}")
+            return []
+
+        products = []
+        for handle in handles:
+            try:
+                rp = session.get(f"{base}/products/{handle}.js", timeout=10)
+                if not rp.ok:
+                    continue
+                products.append(_normalize_product_js(rp.json()))
+            except Exception as e:
+                log.error(f"product .js fetch failed for {base}/products/{handle}: {e}")
+        return products
 
 
 async def search_suggest(base: str, query: str) -> list:
@@ -566,21 +575,23 @@ async def fetch_products(url: str) -> list:
 
 def _probe_shopify_sync(url: str) -> bool:
     """Return True if the URL is a valid, reachable Shopify products.json endpoint."""
-    for attempt in range(2):
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=20)
-            if r.status_code in (401, 403) or "password" in r.url:
+    with requests.Session() as session:
+        session.headers.update(HEADERS)
+        for attempt in range(2):
+            try:
+                r = session.get(url, timeout=20)
+                if r.status_code in (401, 403) or "password" in r.url:
+                    return False
+                if not r.ok:
+                    return False
+                data = r.json()
+                return isinstance(data, dict) and "products" in data
+            except requests.exceptions.Timeout:
+                if attempt == 0:
+                    continue
                 return False
-            if not r.ok:
+            except Exception:
                 return False
-            data = r.json()
-            return isinstance(data, dict) and "products" in data
-        except requests.exceptions.Timeout:
-            if attempt == 0:
-                continue
-            return False
-        except Exception:
-            return False
     return False
 
 

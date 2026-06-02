@@ -105,11 +105,15 @@ class SearchPaginator(discord.ui.View):
             await interaction.response.send_message("Could not find store for this product.", ephemeral=True)
             return
         base      = _base_url(store_url)
-        product   = await asyncio.to_thread(
-            lambda: _normalize_product_js(
-                requests.get(f"{base}/products/{r.handle}.js", headers=HEADERS, timeout=10).json()
+        try:
+            product = await asyncio.to_thread(
+                lambda: _normalize_product_js(
+                    requests.get(f"{base}/products/{r.handle}.js", headers=HEADERS, timeout=10).json()
+                )
             )
-        )
+        except Exception:
+            await interaction.response.send_message("Could not fetch product details. Please try again.", ephemeral=True)
+            return
         picker = WatchSizePicker(self.cog, self.guild_id, r.store_name, store_url, product)
         await interaction.response.send_message(embed=picker.build_embed(), view=picker, ephemeral=True)
 
@@ -1131,7 +1135,7 @@ class RestockCog(commands.Cog):
                 if vid not in previous:
                     new_items.setdefault(handle, []).append(info)
                 elif not previous[vid].get("available", True) and info["available"]:
-                    restocked.setdefault(handle, []).append(info)
+                    restocked.setdefault(handle, []).append({**info, "variant_id": vid})
                 elif previous[vid].get("available", True) and not info["available"]:
                     sold_out.setdefault(handle, []).append(info)
 

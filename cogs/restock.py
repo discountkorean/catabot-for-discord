@@ -770,7 +770,11 @@ class RestockCog(commands.Cog):
         embed.add_field(name="Interval", value=f"{interval}s ({interval // 60}m)",        inline=True)
         embed.add_field(name="Default Channel", value=channel.mention if channel else "Not set", inline=True)
         if stores:
-            store_lines = "\n".join(f"• **{n}** → {self._channel_label(gs, n)}" for n in stores)
+            store_lines = "\n".join(
+                f"• **{n}** → {self._channel_label(gs, n)}" if n in gs.get("channels", {})
+                else f"• {n}"
+                for n in stores
+            )
         else:
             store_lines = "None — use `/rst admin add`"
         embed.add_field(name="Stores", value=store_lines, inline=False)

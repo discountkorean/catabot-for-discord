@@ -1081,6 +1081,9 @@ class RestockCog(commands.Cog):
         if not user and not role:
             await interaction.followup.send("❌ Provide a `user` or `role`.", ephemeral=True)
             return
+        if user and role:
+            await interaction.followup.send("❌ Provide a `user` **or** a `role`, not both. Run the command twice to subscribe each.", ephemeral=True)
+            return
 
         stores = self._guild_stores(interaction.guild_id)
         if store_name and store_name not in stores:

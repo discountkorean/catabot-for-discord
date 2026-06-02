@@ -91,7 +91,6 @@ class StockBot(commands.Bot):
             await asyncio.to_thread(_git_pull_data)
         self.tree.add_command(help_group)
         await self.load_extension("cogs.restock")
-        await self.load_extension("cogs.steam")
         await self.tree.sync()
         log.info("Slash commands synced")
 
@@ -129,9 +128,6 @@ def _build_help_pages(is_admin: bool) -> list[discord.Embed]:
         "`/rst store [store]` — Store info and subscribers\n"
         "`/rst user [user]` — Stores a user is subscribed to\n"
         "`/rst search [query] [stores...]` — Search for a product"
-    ), inline=False)
-    p1.add_field(name="🎮 Steam (/steam)", value=(
-        "`/steam search [query]` — Search for a game on Steam"
     ), inline=False)
     p1.add_field(name="🔍 Help", value=(
         "`/help general` — This overview\n"

@@ -1,13 +1,13 @@
 import asyncio
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 import logging
 import logging.handlers
 import os
 import sys
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 try:
@@ -63,6 +63,8 @@ class StockBot(commands.Bot):
 
     async def on_ready(self):
         log.info(f"Logged in as {self.user} (ID: {self.user.id}){' [DEV MODE]' if IS_DEV else ''}")
+        if not scheduled_restart.is_running():
+            scheduled_restart.start()
 
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         msg = "❌ An unexpected error occurred. Please try again."
@@ -185,6 +187,23 @@ async def cmd_help(interaction: discord.Interaction):
     is_admin = interaction.user.guild_permissions.administrator
     pages    = _build_help_pages(is_admin)
     await interaction.response.send_message(embed=pages[0], view=HelpPaginator(pages, 0), ephemeral=True)
+
+
+RESTART_HOURS_AEST = {6, 18}  # 6 AM and 6 PM AEST
+
+@tasks.loop(minutes=1)
+async def scheduled_restart():
+    now = datetime.now(AEST)
+    if now.hour in RESTART_HOURS_AEST and now.minute == 0:
+        log.info(f"Scheduled restart at {now.strftime('%H:%M')} AEST")
+        from cogs.restock import save_state, save_products_cache, load_bot_state, save_bot_state
+        cog = bot.cogs.get("RestockCog")
+        if cog:
+            save_state(cog.state)
+            save_products_cache(cog.products_cache)
+        args = [sys.executable] + [a for a in sys.argv if a != "--restarted"] + ["--restarted"]
+        subprocess.Popen(args, cwd=BASE_DIR)
+        os._exit(0)
 
 
 @bot.tree.command(name="restart", description="Restart the bot process")

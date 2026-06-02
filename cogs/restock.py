@@ -339,6 +339,31 @@ class CatalogPaginator(discord.ui.View):
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
 
+class ATCView(discord.ui.View):
+    """Link-button row for Add-to-Cart on restock/new-item alerts."""
+
+    def __init__(self, store_url: str, variants: list[dict]):
+        super().__init__(timeout=None)
+        from urllib.parse import urlparse
+        p       = urlparse(store_url)
+        base    = f"{p.scheme}://{p.netloc}"
+        domain  = _display_domain(p.netloc)
+        available = [v for v in variants if v.get("available") and v.get("variant_id")]
+        for v in available[:20]:
+            label = v.get("variant_title", "")
+            if not label or label.lower() == "default title":
+                label = "Buy Now"
+            self.add_item(discord.ui.Button(
+                label=label[:80],
+                url=f"https://{domain}/cart/{v['variant_id']}:1",
+                style=discord.ButtonStyle.link,
+            ))
+
+    @property
+    def has_buttons(self) -> bool:
+        return len(self.children) > 0
+
+
 BASE_DIR       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILE    = os.path.join(BASE_DIR, "config.toml")
 DATA_DIR       = os.path.join(BASE_DIR, "data")
@@ -437,8 +462,9 @@ def _base_url(url: str) -> str:
     return f"{p.scheme}://{p.netloc}"
 
 
-def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> list:
-    """Fetch all pages of a Shopify endpoint using cursor-based Link header pagination."""
+def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> tuple[list, bool]:
+    """Fetch all pages of a Shopify endpoint using cursor-based Link header pagination.
+    Returns (results, password_locked)."""
     import time
     from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
@@ -450,6 +476,7 @@ def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> list:
 
     next_url: str | None = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
     results = []
+    password_locked = False
 
     with requests.Session() as session:
         session.headers.update(HEADERS)
@@ -460,6 +487,7 @@ def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> list:
                     time.sleep(5)
                     continue
                 if r.status_code in (401, 403) or "password" in r.url:
+                    password_locked = True
                     break
                 r.raise_for_status()
                 data = r.json()
@@ -485,7 +513,7 @@ def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> list:
             except Exception as e:
                 log.error(f"Failed to fetch {next_url}: {e}")
                 break
-    return results
+    return results, password_locked
 
 
 def _normalize_product_js(p: dict) -> dict:
@@ -565,8 +593,8 @@ async def search_suggest(base: str, query: str) -> list:
     return await asyncio.to_thread(_search_suggest_sync, base, query)
 
 
-async def fetch_products(url: str) -> list:
-    """Fetch all products for a store via cursor-paginated products.json."""
+async def fetch_products(url: str) -> tuple[list, bool]:
+    """Fetch all products for a store. Returns (products, password_locked)."""
     base = _base_url(url)
     return await asyncio.to_thread(
         _fetch_paginated_sync, f"{base}/products.json", "products", 0.5
@@ -897,13 +925,34 @@ def _default_guild() -> dict:
     }
 
 
+def make_password_embed(store_name: str, store_url: str, locked: bool) -> discord.Embed:
+    domain = _display_domain(store_url.split("/")[2])
+    if locked:
+        embed = discord.Embed(
+            title=f"🔒 Store Locked: {store_name}",
+            description="The store is now password-protected. This often signals an upcoming drop.",
+            color=0xED4245,
+            timestamp=datetime.now(ZoneInfo("UTC")),
+        )
+    else:
+        embed = discord.Embed(
+            title=f"🔓 Store Live: {store_name}",
+            description="The password page is down — the store is accessible again.",
+            color=0x57F287,
+            timestamp=datetime.now(ZoneInfo("UTC")),
+        )
+    embed.set_footer(text=f"{bot_footer()} • {domain}")
+    return embed
+
+
 class RestockCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
-        self.bot        = bot
-        self.state      = load_state()
-        raw             = load_bot_state()
-        self.guilds: dict      = load_all_guilds()
-        self._last_polled: dict = {}   # guild_id_str → last poll timestamp
+        self.bot             = bot
+        self.state           = load_state()
+        raw                  = load_bot_state()
+        self.guilds: dict    = load_all_guilds()
+        self._last_polled: dict  = {}   # guild_id_str → last poll timestamp
+        self.password_state: dict[str, bool] = {}  # store_url → currently locked
 
         # Detect legacy single-guild format and migrate in on_ready
         if not self.guilds and ("alert_channel_id" in raw or "guilds" in raw):
@@ -1071,7 +1120,20 @@ class RestockCog(commands.Cog):
 
         for store_name, url in due_stores.items():
             log.info(f"Checking {store_name}...")
-            products = await fetch_products(url)
+            products, password_locked = await fetch_products(url)
+
+            # ── Password page detection ───────────────────────────────────────
+            was_locked = self.password_state.get(url, False)
+            if password_locked != was_locked:
+                self.password_state[url] = password_locked
+                for gid_str, gs in due_guilds.items():
+                    if store_name not in gs.get("stores", {}):
+                        continue
+                    ch = await self._resolve_store_channel(gs, store_name, gid_str)
+                    if ch:
+                        await ch.send(embed=make_password_embed(store_name, url, password_locked))
+                        log.info(f"{'LOCKED' if password_locked else 'UNLOCKED'}: {store_name} → guild {gid_str}")
+
             if not products:
                 continue
 
@@ -1110,7 +1172,7 @@ class RestockCog(commands.Cog):
             for vid, info in current.items():
                 handle = info["handle"]
                 if vid not in previous:
-                    new_items.setdefault(handle, []).append(info)
+                    new_items.setdefault(handle, []).append({**info, "variant_id": vid})
                 elif not previous[vid].get("available", True) and info["available"]:
                     restocked.setdefault(handle, []).append({**info, "variant_id": vid})
                 elif previous[vid].get("available", True) and not info["available"]:
@@ -1159,11 +1221,21 @@ class RestockCog(commands.Cog):
                     log.info(f"AGGREGATE ({alert_count} items) @ {store_name} → guild {guild_id_str}")
                 else:
                     for variants in restocked.values():
-                        await channel.send(content=_ping_for(variants), embed=make_restock_embed(store_name, url, variants))
+                        atc = ATCView(url, variants)
+                        await channel.send(
+                            content=_ping_for(variants),
+                            embed=make_restock_embed(store_name, url, variants),
+                            view=atc if atc.has_buttons else None,
+                        )
                         log.info(f"RESTOCK: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
                     for variants in new_items.values():
-                        await channel.send(content=_ping_for(variants), embed=make_new_item_embed(store_name, url, variants))
+                        atc = ATCView(url, variants)
+                        await channel.send(
+                            content=_ping_for(variants),
+                            embed=make_new_item_embed(store_name, url, variants),
+                            view=atc if atc.has_buttons else None,
+                        )
                         log.info(f"NEW ITEM: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
                 for variants in sold_out.values():
@@ -1225,7 +1297,8 @@ class RestockCog(commands.Cog):
                 embed = make_restock_embed(store_name or sub["store"], store_url, matched)
                 embed.title = f"👀 {embed.title}"
                 embed.set_footer(text=f"You're watching this product  •  {bot_footer()}")
-                await user.send(embed=embed)
+                atc = ATCView(store_url, matched)
+                await user.send(embed=embed, view=atc if atc.has_buttons else None)
                 log.info(f"Watch DM sent to {sub['target_id']} for {sub['handle']}")
             except discord.Forbidden:
                 log.warning(f"DMs disabled for user {sub['target_id']}, removing watch {sub['id']}")
@@ -1829,7 +1902,7 @@ class RestockCog(commands.Cog):
             )
             return
 
-        products = await fetch_products(stores[store_name])
+        products, _ = await fetch_products(stores[store_name])
         if not products:
             await interaction.followup.send(f"❌ Could not fetch products from **{store_name}**.", ephemeral=True)
             return
@@ -2017,6 +2090,36 @@ class RestockCog(commands.Cog):
         pages    = [products[i:i + CATALOG_PAGE_SIZE] for i in range(0, len(products), CATALOG_PAGE_SIZE)]
         view     = CatalogPaginator(store_name, store_url, pages)
         await interaction.followup.send(embed=view.build_embed(), view=view)
+
+    @tracker.command(name="check", description="On-demand stock check for a specific product")
+    @app_commands.describe(store_name="Store to check", query="Product name or handle")
+    @app_commands.autocomplete(store_name=_store_autocomplete)
+    async def tracker_check(self, interaction: discord.Interaction, store_name: str, query: str):
+        await interaction.response.defer()
+        stores = self._guild_stores(interaction.guild_id)
+
+        if store_name not in stores:
+            await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.")
+            return
+
+        store_url = stores[store_name]
+        base      = _base_url(store_url)
+        products  = await search_suggest(base, query)
+
+        if not products:
+            await interaction.followup.send(f"No products found matching **{query}** in **{store_name}**.")
+            return
+
+        results = []
+        for product in products[:MAX_SEARCH_RESULTS]:
+            results.append(SearchResult(store_name, store_url, product))
+
+        paginator = SearchPaginator(results, cog=self, guild_id=interaction.guild_id)
+        await interaction.followup.send(
+            content=f"**Live stock check** — {store_name} · `{query}`",
+            embed=paginator.build_embed(),
+            view=paginator,
+        )
 
     # ── Startup ───────────────────────────────────────────────────────────────
 

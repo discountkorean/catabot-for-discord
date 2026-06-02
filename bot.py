@@ -36,6 +36,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 DATA_DIR = os.path.join(BASE_DIR, "data")
+IS_DEV   = os.environ.get("BOT_ENV", "").lower() == "dev"
 
 # Suppress console windows when spawning git subprocesses on Windows
 _GIT_FLAGS = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
@@ -84,8 +85,10 @@ class StockBot(commands.Bot):
     async def setup_hook(self):
         with open(PID_FILE, "w") as f:
             f.write(str(os.getpid()))
-        # Pull latest data before loading state
-        await asyncio.to_thread(_git_pull_data)
+        if IS_DEV:
+            log.info("DEV mode — skipping data pull")
+        else:
+            await asyncio.to_thread(_git_pull_data)
         self.tree.add_command(help_group)
         await self.load_extension("cogs.restock")
         await self.load_extension("cogs.steam")
@@ -93,8 +96,8 @@ class StockBot(commands.Bot):
         log.info("Slash commands synced")
 
     async def on_ready(self):
-        log.info(f"Logged in as {self.user} (ID: {self.user.id})")
-        if not self.sync_data_task.is_running():
+        log.info(f"Logged in as {self.user} (ID: {self.user.id}){' [DEV MODE]' if IS_DEV else ''}")
+        if not IS_DEV and not self.sync_data_task.is_running():
             self.sync_data_task.start()
 
     @tasks.loop(minutes=5)

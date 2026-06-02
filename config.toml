@@ -4,7 +4,7 @@
 # Use /stop then /start in Discord after making changes.
 
 [bot]
-version = "3.2.2"
+version = "3.2.3"
 
 [discord]
 # token loaded from .env → DISCORD_TOKEN

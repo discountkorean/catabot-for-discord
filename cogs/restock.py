@@ -278,6 +278,56 @@ def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> list:
     return results
 
 
+def _search_suggest_sync(base: str, query: str, limit: int = 10) -> list:
+    """
+    Query /search/suggest.json for product handles, then fetch each product's
+    full variant data via /products/{handle}.js. Returns a list of product dicts
+    in the same shape as products.json items.
+    """
+    try:
+        r = requests.get(
+            f"{base}/search/suggest.json",
+            params={"q": query, "resources[type]": "product", "resources[limit]": limit},
+            headers=HEADERS,
+            timeout=10,
+        )
+        if not r.ok:
+            return []
+        handles = [
+            p["handle"]
+            for p in r.json().get("resources", {}).get("results", {}).get("products", [])
+            if p.get("handle")
+        ]
+    except Exception as e:
+        log.error(f"suggest failed for {base}: {e}")
+        return []
+
+    products = []
+    for handle in handles:
+        try:
+            rp = requests.get(f"{base}/products/{handle}.js", headers=HEADERS, timeout=10)
+            if not rp.ok:
+                continue
+            p = rp.json()
+            # Normalize .js format to match products.json shape expected by SearchResult:
+            # - variant prices are in cents → convert to decimal string
+            # - images is a list of URL strings → wrap as [{"src": url}]
+            for v in p.get("variants", []):
+                if isinstance(v.get("price"), int):
+                    v["price"] = f"{v['price'] / 100:.2f}"
+            raw_images = p.get("images", [])
+            if raw_images and isinstance(raw_images[0], str):
+                p["images"] = [{"src": ("https:" + img if img.startswith("//") else img)} for img in raw_images]
+            products.append(p)
+        except Exception as e:
+            log.error(f"product .js fetch failed for {base}/products/{handle}: {e}")
+    return products
+
+
+async def search_suggest(base: str, query: str) -> list:
+    return await asyncio.to_thread(_search_suggest_sync, base, query)
+
+
 def _fetch_products_sync(url: str) -> list:
     """
     Deep-fetch all products for a store:
@@ -1593,13 +1643,12 @@ class RestockCog(commands.Cog):
             return
 
         results: list[SearchResult] = []
-        q = query.lower()
 
         async def search_store(name: str):
-            products = await fetch_products(all_stores[name])
+            base     = _base_url(all_stores[name])
+            products = await search_suggest(base, query)
             for product in products:
-                if q in product.get("title", "").lower():
-                    results.append(SearchResult(name, all_stores[name], product))
+                results.append(SearchResult(name, all_stores[name], product))
 
         await asyncio.gather(*(search_store(n) for n in chosen))
 

@@ -1061,11 +1061,11 @@ class RestockCog(commands.Cog):
                 log.info(f"Watch DM sent to {sub['target_id']} for {sub['handle']}")
             except discord.Forbidden:
                 log.warning(f"DMs disabled for user {sub['target_id']}, removing watch {sub['id']}")
-                for gs in self.guilds.values():
+                for gid_str, gs in self.guilds.items():
                     before = len(gs.get("subscriptions", []))
                     gs["subscriptions"] = [s for s in gs.get("subscriptions", []) if s["id"] != sub["id"]]
                     if len(gs["subscriptions"]) != before:
-                        self.persist(int(list(self.guilds.keys())[list(self.guilds.values()).index(gs)]))
+                        self.persist(int(gid_str))
             except Exception as e:
                 log.error(f"Failed to send watch DM to {sub['target_id']}: {e}")
 

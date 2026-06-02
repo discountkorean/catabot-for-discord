@@ -6,7 +6,9 @@ A Discord bot that monitors Shopify stores for restocks, new drops, sold out and
 
 - Polls Shopify `products.json` endpoints on a configurable per-server interval
 - Detects restocks, new items, sold out, and removed products
-- Per-store ping subscriptions for users and roles
+- Filtered subscriptions — subscribe by store, product name keywords, and/or size
+- Fuzzy size matching: XS / XSMALL / x-small / extra-small all match the same
+- Multi-keyword name filtering with AND logic (item must contain all keywords)
 - Auto-discovers Shopify endpoints from human-friendly URLs
 - Silently skips password-protected or unreachable stores
 - Full multi-server support — each server manages its own stores and settings
@@ -49,10 +51,24 @@ python bot.py     # Direct
 | Command | Description |
 |---|---|
 | `/rst status` | Show tracker state, interval, and monitored stores |
-| `/rst notify [store]` | Toggle restock pings for yourself |
-| `/rst store [store]` | Show store info and current subscribers |
-| `/rst user [user]` | Show which stores a user is subscribed to |
+| `/rst subscribe [store] [names] [sizes]` | Subscribe to restock alerts with optional filters |
+| `/rst unsubscribe <id>` | Remove one of your subscriptions by ID |
+| `/rst subscriptions [user]` | List your active subscriptions |
+| `/rst store [store]` | Show store info and all current subscribers |
+| `/rst user [user]` | Show a user's subscriptions |
 | `/rst search [query] [stores...]` | Search for a product across stores |
+
+#### `/rst subscribe` filter options
+
+All parameters are optional. Omitting all creates a catch-all subscription for every item at every store.
+
+| Parameter | Example | Behaviour |
+|---|---|---|
+| `store` | `store:HOUND ARCHIVES` | Only notify for items from this store |
+| `names` | `names:black,zip-up` | Item title must contain **all** keywords (AND logic) |
+| `sizes` | `sizes:small,xs` | Item must match **any** of the listed sizes (OR logic) |
+
+Size matching is fuzzy — `small`, `SMALL`, `Sm`, and `S` all resolve to the same canonical size.
 
 ### Admin (`/rst admin`)
 
@@ -65,7 +81,8 @@ python bot.py     # Direct
 | `/rst admin interval [seconds]` | Set poll interval for this server (60–600s) |
 | `/rst admin add [name] [url]` | Add a Shopify store (auto-discovers endpoint) |
 | `/rst admin remove [store...]` | Remove up to 5 stores |
-| `/rst admin notify [store] [user/role]` | Toggle pings for any user or role |
+| `/rst admin subscribe [user/role] [store] [names] [sizes]` | Create a filtered subscription for any user or role |
+| `/rst admin unsubscribe <id>` | Remove any subscription by ID |
 | `/rst admin recent [store] [channel]` | Post the most recently updated item |
 | `/rst admin alert [store] [channel]` | Send a fake restock alert for testing |
 | `/rst admin export` | Export store list as a shareable code |

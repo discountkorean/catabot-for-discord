@@ -233,35 +233,98 @@ def load_all_guilds() -> dict:
 
 # ── Shopify helpers ───────────────────────────────────────────────────────────
 
-def _fetch_products_sync(url: str) -> list:
+def _base_url(url: str) -> str:
+    """Strip path/query from a store URL down to https://domain."""
+    from urllib.parse import urlparse
+    p = urlparse(url)
+    return f"{p.scheme}://{p.netloc}"
+
+
+def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> list:
+    """Fetch all pages of a Shopify endpoint, returning all `key` items."""
+    import time
     from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
     parsed = urlparse(url)
     qs = parse_qs(parsed.query, keep_blank_values=True)
     qs["limit"] = ["250"]
 
-    all_products: list = []
+    results = []
     page = 1
     while True:
         qs["page"] = [str(page)]
         paged_url = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
         try:
             r = requests.get(paged_url, headers=HEADERS, timeout=15)
+            if r.status_code == 429:
+                time.sleep(5)
+                continue
             if r.status_code in (401, 403) or "password" in r.url:
                 break
             r.raise_for_status()
             data = r.json()
             if not isinstance(data, dict):
                 break
-            batch = data.get("products", [])
-            all_products.extend(batch)
+            batch = data.get(key, [])
+            results.extend(batch)
             if len(batch) < 250:
                 break
             page += 1
+            time.sleep(delay)
         except requests.HTTPError:
             break
         except Exception as e:
             log.error(f"Failed to fetch {paged_url}: {e}")
             break
+    return results
+
+
+def _fetch_products_sync(url: str) -> list:
+    """
+    Deep-fetch all products for a store:
+    1. Enumerate all collections via collections.json
+    2. Fetch products from each collection handle (deduped by product ID)
+    3. Top up with products.json to catch anything not in a collection
+    """
+    import time
+
+    base = _base_url(url)
+
+    # Step 1: get all collection handles
+    collections = _fetch_paginated_sync(f"{base}/collections.json", "collections", delay=0.5)
+    handles = [c["handle"] for c in collections if c.get("handle")]
+    log.info(f"[deep-fetch] {base}: {len(handles)} collections found")
+
+    # Step 2: fetch products from each collection, dedupe by product ID
+    seen_ids: set = set()
+    all_products: list = []
+
+    for handle in handles:
+        col_url = f"{base}/collections/{handle}/products.json"
+        batch = _fetch_paginated_sync(col_url, "products", delay=0.5)
+        added = 0
+        for p in batch:
+            pid = p.get("id")
+            if pid and pid not in seen_ids:
+                seen_ids.add(pid)
+                all_products.append(p)
+                added += 1
+        if added:
+            log.info(f"[deep-fetch] /{handle}: +{added} new products ({len(all_products)} total)")
+        time.sleep(0.5)
+
+    # Step 3: top up with products.json
+    top_up = _fetch_paginated_sync(f"{base}/products.json", "products", delay=0.5)
+    added = 0
+    for p in top_up:
+        pid = p.get("id")
+        if pid and pid not in seen_ids:
+            seen_ids.add(pid)
+            all_products.append(p)
+            added += 1
+    if added:
+        log.info(f"[deep-fetch] products.json top-up: +{added} ({len(all_products)} total)")
+
+    log.info(f"[deep-fetch] {base}: complete — {len(all_products)} unique products")
     return all_products
 
 

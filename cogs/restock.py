@@ -882,11 +882,14 @@ def make_aggregate_embed(store_name: str, store_url: str,
                          restocked: dict, new_items: dict) -> discord.Embed:
     domain = _display_domain(store_url.split("/")[2])
     total  = len(restocked) + len(new_items)
+    footer = f"{bot_footer()} • {domain}"
     embed  = discord.Embed(
         title=f"📦 Mass Drop: {store_name} — {total} items",
         color=0x5865F2,
         timestamp=datetime.now(ZoneInfo("UTC")),
     )
+    embed.set_footer(text=footer)
+
     lines = []
     for variants in restocked.values():
         title = variants[0]["title"]
@@ -896,9 +899,26 @@ def make_aggregate_embed(store_name: str, store_url: str,
         title = variants[0]["title"]
         sizes = _size_list([v for v in variants if v.get("available")]) or _size_list(variants)
         lines.append(f"🟠 **{title}** ({sizes})")
-    # Split into chunks to stay under Discord's 1024-char field limit
-    chunk, chunks = [], []
+
+    # Budget: 6000 total − title − footer − field name overhead
+    EMBED_LIMIT = 5800
+    used   = len(embed.title or "") + len(footer)
+    shown  = []
+    hidden = 0
     for line in lines:
+        if used + len(line) + 1 > EMBED_LIMIT:
+            hidden = len(lines) - len(shown)
+            break
+        shown.append(line)
+        used += len(line) + 1
+
+    if hidden:
+        suffix = f"\n*…and {hidden} more item{'s' if hidden != 1 else ''}*"
+        shown.append(suffix)
+
+    # Split into ≤1024-char fields
+    chunk, chunks = [], []
+    for line in shown:
         if sum(len(l) + 1 for l in chunk) + len(line) > 1000:
             chunks.append(chunk)
             chunk = []
@@ -907,7 +927,7 @@ def make_aggregate_embed(store_name: str, store_url: str,
         chunks.append(chunk)
     for i, ch in enumerate(chunks):
         embed.add_field(name="Items" if i == 0 else "​", value="\n".join(ch), inline=False)
-    embed.set_footer(text=f"{bot_footer()} • {domain}")
+
     return embed
 
 
@@ -1302,35 +1322,38 @@ class RestockCog(commands.Cog):
                     parts = [f"<@{uid}>" for uid in user_ids] + [f"<@&{rid}>" for rid in role_ids]
                     return " ".join(parts) if parts else None
 
-                alert_count = len(restocked) + len(new_items)
-                if alert_count > AGGREGATE_THRESHOLD:
-                    # Build a combined ping across all alerted variants
-                    all_variants = [v for vlist in list(restocked.values()) + list(new_items.values()) for v in vlist]
-                    ping = _ping_for(all_variants)
-                    await channel.send(content=ping, embed=make_aggregate_embed(store_name, url, restocked, new_items))
-                    log.info(f"AGGREGATE ({alert_count} items) @ {store_name} → guild {guild_id_str}")
-                else:
-                    for variants in restocked.values():
-                        await channel.send(
-                            content=_ping_for(variants),
-                            embed=make_restock_embed(store_name, url, variants),
-                        )
-                        log.info(f"RESTOCK: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
+                try:
+                    alert_count = len(restocked) + len(new_items)
+                    if alert_count > AGGREGATE_THRESHOLD:
+                        all_variants = [v for vlist in list(restocked.values()) + list(new_items.values()) for v in vlist]
+                        ping = _ping_for(all_variants)
+                        await channel.send(content=ping, embed=make_aggregate_embed(store_name, url, restocked, new_items))
+                        log.info(f"AGGREGATE ({alert_count} items) @ {store_name} → guild {guild_id_str}")
+                    else:
+                        for variants in restocked.values():
+                            await channel.send(
+                                content=_ping_for(variants),
+                                embed=make_restock_embed(store_name, url, variants),
+                            )
+                            log.info(f"RESTOCK: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
-                    for variants in new_items.values():
-                        await channel.send(
-                            content=_ping_for(variants),
-                            embed=make_new_item_embed(store_name, url, variants),
-                        )
-                        log.info(f"NEW ITEM: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
+                        for variants in new_items.values():
+                            await channel.send(
+                                content=_ping_for(variants),
+                                embed=make_new_item_embed(store_name, url, variants),
+                            )
+                            log.info(f"NEW ITEM: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
-                for variants in sold_out.values():
-                    await channel.send(embed=make_sold_out_embed(store_name, url, variants))
-                    log.info(f"SOLD OUT: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
+                    for variants in sold_out.values():
+                        await channel.send(embed=make_sold_out_embed(store_name, url, variants))
+                        log.info(f"SOLD OUT: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
-                for variants in removed.values():
-                    await channel.send(embed=make_removed_embed(store_name, url, variants))
-                    log.info(f"REMOVED: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
+                    for variants in removed.values():
+                        await channel.send(embed=make_removed_embed(store_name, url, variants))
+                        log.info(f"REMOVED: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
+
+                except Exception as e:
+                    log.error(f"Failed to send alert for {store_name} → guild {guild_id_str}: {e}")
 
         save_state(self.state)
         save_products_cache(self.products_cache)

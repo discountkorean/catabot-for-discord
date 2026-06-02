@@ -106,6 +106,7 @@ class SearchPaginator(discord.ui.View):
             await interaction.response.send_message("Could not find store for this product.", ephemeral=True)
             return
         base      = _base_url(store_url)
+        await interaction.response.defer(ephemeral=True)
         try:
             product = await asyncio.to_thread(
                 lambda: _normalize_product_js(
@@ -113,10 +114,10 @@ class SearchPaginator(discord.ui.View):
                 )
             )
         except Exception:
-            await interaction.response.send_message("Could not fetch product details. Please try again.", ephemeral=True)
+            await interaction.followup.send("Could not fetch product details. Please try again.", ephemeral=True)
             return
         picker = WatchSizePicker(self.cog, self.guild_id, r.store_name, store_url, product)
-        await interaction.response.send_message(embed=picker.build_embed(), view=picker, ephemeral=True)
+        await interaction.followup.send(embed=picker.build_embed(), view=picker, ephemeral=True)
 
 
 class WatchSizePicker(discord.ui.View):
@@ -994,22 +995,20 @@ def make_removed_embed(store_name: str, store_url: str, variants: list) -> disco
     return embed
 
 
-def make_sold_out_embed(store_name: str, store_url: str, variants: list) -> discord.Embed:
-    first              = variants[0]
-    size_name, sizes   = _format_sizes([v["variant_title"] for v in variants])
-    price              = f"${float(first['price']):.2f}"
-    domain             = _display_domain(store_url.split("/")[2])
+def make_sold_out_embed(store_name: str, store_url: str, sold_out: dict) -> discord.Embed:
+    """sold_out: handle → list of variant dicts (same shape as the sold_out dict from the poll loop)."""
+    domain = _display_domain(store_url.split("/")[2])
     embed  = discord.Embed(
-        title=f"🔴 Sold Out: {first['title']}",
+        title=f"🔴 Sold Out — {store_name}",
         color=0xED4245,
         timestamp=datetime.now(ZoneInfo("UTC")),
     )
-    if first.get("image_url"):
-        embed.set_thumbnail(url=first["image_url"])
-    embed.add_field(name=size_name, value=sizes,           inline=True)
-    embed.add_field(name="Price", value=price,              inline=True)
-    embed.add_field(name="Store", value=store_name,         inline=True)
-    embed.add_field(name="Link",  value=_product_url(store_url, first["handle"]), inline=False)
+    lines = []
+    for variants in sold_out.values():
+        title = variants[0]["title"]
+        _, sizes = _format_sizes([v["variant_title"] for v in variants])
+        lines.append(f"**{title}** ({sizes})")
+    embed.description = "\n".join(lines)
     embed.set_footer(text=f"{bot_footer()} • {domain}")
     return embed
 
@@ -1342,9 +1341,9 @@ class RestockCog(commands.Cog):
                             )
                             log.info(f"NEW ITEM: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
-                    for variants in sold_out.values():
-                        await channel.send(embed=make_sold_out_embed(store_name, url, variants))
-                        log.info(f"SOLD OUT: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
+                    if sold_out:
+                        await channel.send(embed=make_sold_out_embed(store_name, url, sold_out))
+                        log.info(f"SOLD OUT: {len(sold_out)} product(s) @ {store_name} → guild {guild_id_str}")
 
                     for variants in removed.values():
                         await channel.send(embed=make_removed_embed(store_name, url, variants))

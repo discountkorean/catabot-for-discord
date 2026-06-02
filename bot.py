@@ -126,6 +126,9 @@ def _build_help_pages(is_admin: bool) -> list[discord.Embed]:
         "`/rst user [user]` — Stores a user is subscribed to\n"
         "`/rst search [query] [stores...]` — Search for a product"
     ), inline=False)
+    p1.add_field(name="🎮 Steam (/steam)", value=(
+        "`/steam search [query]` — Search for a game on Steam"
+    ), inline=False)
     p1.add_field(name="🔍 Help", value=(
         "`/help general` — This overview\n"
         "`/help rst` — Detailed /rst command list"

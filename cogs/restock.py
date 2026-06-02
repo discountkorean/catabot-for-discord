@@ -880,15 +880,10 @@ def _size_list(variants: list, available_only: bool = False) -> str:
 
 def make_aggregate_embed(store_name: str, store_url: str,
                          restocked: dict, new_items: dict) -> discord.Embed:
-    domain = _display_domain(store_url.split("/")[2])
-    total  = len(restocked) + len(new_items)
-    footer = f"{bot_footer()} • {domain}"
-    embed  = discord.Embed(
-        title=f"📦 Mass Drop: {store_name} — {total} items",
-        color=0x5865F2,
-        timestamp=datetime.now(ZoneInfo("UTC")),
-    )
-    embed.set_footer(text=footer)
+    domain     = _display_domain(store_url.split("/")[2])
+    total      = len(restocked) + len(new_items)
+    footer     = f"{bot_footer()} • {domain}"
+    EMBED_LIMIT = 5800
 
     lines = []
     for variants in restocked.values():
@@ -900,23 +895,26 @@ def make_aggregate_embed(store_name: str, store_url: str,
         sizes = _size_list([v for v in variants if v.get("available")]) or _size_list(variants)
         lines.append(f"🟠 **{title}** ({sizes})")
 
-    # Budget: 6000 total − title − footer − field name overhead
-    EMBED_LIMIT = 5800
-    used   = len(embed.title or "") + len(footer)
-    shown  = []
-    hidden = 0
+    title_text = f"📦 Mass Drop: {store_name} — {total} items"
+    used  = len(title_text) + len(footer)
+    shown = []
     for line in lines:
         if used + len(line) + 1 > EMBED_LIMIT:
-            hidden = len(lines) - len(shown)
-            break
+            # Too large — return a simple summary embed instead
+            embed = discord.Embed(
+                title=f"📦 Mass Drop: {store_name}",
+                description=f"**{total}** item{'s' if total != 1 else ''} updated — check the store for details.",
+                color=0x5865F2,
+                timestamp=datetime.now(ZoneInfo("UTC")),
+            )
+            embed.set_footer(text=footer)
+            return embed
         shown.append(line)
         used += len(line) + 1
 
-    if hidden:
-        suffix = f"\n*…and {hidden} more item{'s' if hidden != 1 else ''}*"
-        shown.append(suffix)
+    embed = discord.Embed(title=title_text, color=0x5865F2, timestamp=datetime.now(ZoneInfo("UTC")))
+    embed.set_footer(text=footer)
 
-    # Split into ≤1024-char fields
     chunk, chunks = [], []
     for line in shown:
         if sum(len(l) + 1 for l in chunk) + len(line) > 1000:

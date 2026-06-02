@@ -432,9 +432,10 @@ def _base_url(url: str) -> str:
 
 
 def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> list:
-    """Fetch all pages of a Shopify endpoint, returning all `key` items."""
+    """Fetch all pages of a Shopify endpoint using ?page=N pagination."""
     import time
     from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
     parsed = urlparse(url)
     qs = parse_qs(parsed.query, keep_blank_values=True)
     qs["limit"] = ["250"]
@@ -565,8 +566,13 @@ def _fetch_products_sync(url: str) -> list:
     all_products: list = []
 
     for handle in handles:
-        col_url = f"{base}/collections/{handle}/products.json"
-        batch = _fetch_paginated_sync(col_url, "products", delay=0.5)
+        col_url = f"{base}/collections/{handle}/products.json?limit=250"
+        try:
+            r = requests.get(col_url, headers=HEADERS, timeout=15)
+            batch = r.json().get("products", []) if r.ok else []
+        except Exception as e:
+            log.error(f"[deep-fetch] collection {handle} fetch failed: {e}")
+            batch = []
         added = 0
         for p in batch:
             pid = p.get("id")
@@ -576,7 +582,7 @@ def _fetch_products_sync(url: str) -> list:
                 added += 1
         if added:
             log.info(f"[deep-fetch] /{handle}: +{added} new products ({len(all_products)} total)")
-        time.sleep(0.5)
+        time.sleep(0.1)
 
     # Step 3: top up with products.json
     top_up = _fetch_paginated_sync(f"{base}/products.json", "products", delay=0.5)
@@ -596,6 +602,16 @@ def _fetch_products_sync(url: str) -> list:
 
 async def fetch_products(url: str) -> list:
     return await asyncio.to_thread(_fetch_products_sync, url)
+
+
+def _fetch_products_fast_sync(url: str) -> list:
+    """Fetch all products via products.json pagination only — no collection traversal."""
+    base = _base_url(url)
+    return _fetch_paginated_sync(f"{base}/products.json", "products", delay=0.3)
+
+
+async def fetch_products_fast(url: str) -> list:
+    return await asyncio.to_thread(_fetch_products_fast_sync, url)
 
 
 def _probe_shopify_sync(url: str) -> bool:
@@ -907,7 +923,7 @@ def make_sold_out_embed(store_name: str, store_url: str, variants: list) -> disc
 
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
-DEFAULT_POLL_INTERVAL = 60
+DEFAULT_POLL_INTERVAL = 180
 
 def _default_guild() -> dict:
     return {
@@ -1493,22 +1509,32 @@ class RestockCog(commands.Cog):
         target = user or interaction.user
         stores = self._guild_stores(interaction.guild_id)
 
-        subs = [s for s in gs.get("subscriptions", []) if s["type"] == "user" and s["target_id"] == target.id]
+        subs = [s for s in gs.get("subscriptions", []) if s["type"] in ("user", "watch") and s["target_id"] == target.id]
 
         embed = discord.Embed(title=target.display_name, color=0x5865F2, timestamp=datetime.now(ZoneInfo("UTC")))
         embed.set_thumbnail(url=target.display_avatar.url)
         embed.add_field(name="Username", value=str(target), inline=True)
 
         if subs:
-            lines = []
+            user_lines = []
+            watch_lines = []
             for s in subs:
-                store_label = ", ".join(s["stores"]) if s["stores"] else "All stores"
-                filters = []
-                if s["names"]: filters.append(f"names: {', '.join(s['names'])}")
-                if s["sizes"]: filters.append(f"sizes: {', '.join(s['sizes'])}")
-                filter_str = " · ".join(filters) if filters else "all items"
-                lines.append(f"**{store_label}** — {filter_str} `[{s['id']}]`")
-            embed.add_field(name=f"🔔 Subscriptions ({len(subs)})", value="\n".join(lines), inline=False)
+                if s["type"] == "watch":
+                    titles = ", ".join(s.get("variant_titles", [])) or "all variants"
+                    watch_lines.append(f"**{s['store']}** — `{s['handle']}` ({titles}) `[{s['id']}]`")
+                else:
+                    store_label = ", ".join(s["stores"]) if s["stores"] else "All stores"
+                    filters = []
+                    if s["names"]: filters.append(f"names: {', '.join(s['names'])}")
+                    if s["sizes"]: filters.append(f"sizes: {', '.join(s['sizes'])}")
+                    filter_str = " · ".join(filters) if filters else "all items"
+                    user_lines.append(f"**{store_label}** — {filter_str} `[{s['id']}]`")
+            if user_lines:
+                embed.add_field(name=f"🔔 Subscriptions ({len(user_lines)})", value="\n".join(user_lines), inline=False)
+            if watch_lines:
+                embed.add_field(name=f"👀 Watches ({len(watch_lines)})", value="\n".join(watch_lines), inline=False)
+            if not user_lines and not watch_lines:
+                embed.add_field(name="🔔 Subscriptions", value="None", inline=False)
         else:
             embed.add_field(name="🔔 Subscriptions", value="None", inline=False)
 
@@ -2003,18 +2029,32 @@ class RestockCog(commands.Cog):
             await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.", ephemeral=True)
             return
 
-        products = await fetch_products(stores[store_name])
-        if not products:
-            await interaction.followup.send(f"❌ Could not fetch products from **{store_name}**.", ephemeral=True)
+        store_url = stores[store_name]
+        cached    = self.state.get(store_url)
+        if not cached:
+            await interaction.followup.send(
+                f"❌ No cached data for **{store_name}** yet — wait for the next poll cycle.",
+                ephemeral=True,
+            )
             return
 
-        # Sort: newest first by created_at, fall back to stock status
-        def _sort_key(p):
-            return p.get("created_at", "")
+        # Reconstruct product list from flat variant map grouped by handle
+        product_map: dict[str, dict] = {}
+        for v in cached.values():
+            handle = v.get("handle", "")
+            if handle not in product_map:
+                product_map[handle] = {
+                    "title":    v.get("title", handle),
+                    "variants": [],
+                }
+            product_map[handle]["variants"].append({
+                "available": v.get("available", False),
+                "price":     v.get("price", "0.00"),
+            })
 
-        products = sorted(products, key=_sort_key, reverse=True)
+        products = sorted(product_map.values(), key=lambda p: p["title"].lower())
         pages    = [products[i:i + CATALOG_PAGE_SIZE] for i in range(0, len(products), CATALOG_PAGE_SIZE)]
-        view     = CatalogPaginator(store_name, stores[store_name], pages)
+        view     = CatalogPaginator(store_name, store_url, pages)
         await interaction.followup.send(embed=view.build_embed(), view=view)
 
     # ── Startup ───────────────────────────────────────────────────────────────
@@ -2076,6 +2116,13 @@ class RestockCog(commands.Cog):
                 log.info(f"Migrated nested guilds dict to per-folder format ({len(legacy['guilds'])} guilds)")
 
             del self._legacy_state
+
+        # Migrate guilds still on the old 60s default to 180s
+        for gid, gs in self.guilds.items():
+            if gs.get("poll_interval") == 60:
+                gs["poll_interval"] = DEFAULT_POLL_INTERVAL
+                self.persist(gid)
+                log.info(f"Updated poll_interval for guild {gid} to {DEFAULT_POLL_INTERVAL}s")
 
         # Resume poll if any guild has an active channel
         any_active = any(self._guild_is_active(g) for g in self.guilds.values())

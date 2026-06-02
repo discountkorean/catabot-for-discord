@@ -4,9 +4,11 @@ A Discord bot that monitors Shopify stores for restocks, new drops, sold out and
 
 ## Features
 
-- Polls Shopify `products.json` endpoints on a configurable per-server interval
+- Polls Shopify `products.json` endpoints on a configurable per-server interval (default 5 minutes)
+- Full pagination support — fetches all products regardless of catalog size (cursor-based and page-based fallback)
 - Detects restocks, new items, sold out, and removed products
 - Filtered subscriptions — subscribe by store, product name keywords, and/or size
+- Role subscriptions — admins can subscribe a Discord role to receive pings
 - Fuzzy size matching: XS / XSMALL / x-small all resolve to the same canonical size
 - Multi-keyword name filtering with AND logic (item must contain all keywords)
 - Per-store channel routing — send alerts to specific channels, threads, or forums
@@ -16,7 +18,8 @@ A Discord bot that monitors Shopify stores for restocks, new drops, sold out and
 - Auto-discovers Shopify endpoints from human-friendly URLs
 - Silently skips password-protected or unreachable stores
 - Full multi-server support — each server manages its own stores and settings
-- Per-server data persisted to a private git repo, pulled on startup
+- Per-server data and full product cache persisted locally
+- Watchdog auto-restarts the bot on crash with smart backoff for socket exhaustion
 
 ## Setup
 
@@ -28,8 +31,6 @@ A Discord bot that monitors Shopify stores for restocks, new drops, sold out and
 ```
 pip install -r requirements.txt
 ```
-
-On Windows, `start.bat` pulls the latest data and starts the bot automatically.
 
 ### Configuration
 
@@ -44,9 +45,19 @@ DISCORD_TOKEN=your_token_here
 3. Run the bot:
 
 ```
-start.bat         # Windows (recommended)
+watchdog.bat      # Windows (recommended — auto-restarts on crash)
 python bot.py     # Direct
 ```
+
+### Windows TCP tuning (recommended for 24/7 operation)
+
+Run once as Administrator to prevent socket exhaustion (`WinError 10055`) on long-running deployments:
+
+```
+scripts\apply-tcp-tuning.ps1
+```
+
+Reboot after running. Sets `TcpTimedWaitDelay=30s` and expands the ephemeral port range.
 
 ## Commands
 
@@ -137,17 +148,18 @@ catabot-for-discord/
 ├── requirements.txt    # Python dependencies
 ├── config.toml         # Version and default poll interval
 ├── .env                # Secret credentials (not committed)
-├── start.bat           # Pull data + start bot
-├── stop.bat            # Sync data + stop bot
-├── restart.bat         # Sync data + restart bot
+├── watchdog.bat        # Start bot with auto-restart watchdog
+├── stop.bat            # Stop the bot
 ├── cogs/
 │   └── restock.py      # All monitoring logic and commands
-├── data/               # Runtime state (separate private repo)
+├── data/               # Runtime state (local, not committed)
 │   ├── bot_state.json
 │   ├── stock_state.json
+│   ├── products_cache.json
 │   └── {guild_id}/
 │       └── state.json
 └── scripts/
-    ├── bot.ps1         # Windows start/stop/restart helper
-    └── sync-data.bat   # Manually sync both repos
+    ├── watchdog.ps1        # PowerShell watchdog (launched by watchdog.bat)
+    ├── apply-tcp-tuning.ps1 # One-time Windows TCP registry fix
+    └── check_pagination.py  # Diagnostic — test Shopify pagination for a store URL
 ```

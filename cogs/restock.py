@@ -367,8 +367,9 @@ class ATCView(discord.ui.View):
 BASE_DIR       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILE    = os.path.join(BASE_DIR, "config.toml")
 DATA_DIR       = os.path.join(BASE_DIR, "data")
-STATE_FILE     = os.path.join(DATA_DIR, "stock_state.json")
-BOT_STATE_FILE = os.path.join(DATA_DIR, "bot_state.json")
+STATE_FILE         = os.path.join(DATA_DIR, "stock_state.json")
+BOT_STATE_FILE     = os.path.join(DATA_DIR, "bot_state.json")
+PRODUCTS_CACHE_FILE = os.path.join(DATA_DIR, "products_cache.json")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -412,6 +413,18 @@ def load_state() -> dict:
 def save_state(state: dict):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
+
+
+def load_products_cache() -> dict:
+    if os.path.exists(PRODUCTS_CACHE_FILE):
+        with open(PRODUCTS_CACHE_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_products_cache(cache: dict):
+    with open(PRODUCTS_CACHE_FILE, "w") as f:
+        json.dump(cache, f, indent=2)
 
 
 def load_bot_state() -> dict:
@@ -468,8 +481,12 @@ def _base_url(url: str) -> str:
 
 
 def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> tuple[list, bool]:
-    """Fetch all pages of a Shopify endpoint using cursor-based Link header pagination.
-    Returns (results, password_locked)."""
+    """Fetch all pages of a Shopify endpoint.
+
+    Tries cursor-based pagination (Link header) first. If the first response
+    has no Link header, falls back to legacy page-based (?page=N) pagination,
+    which is required for stores like Gymshark that don't emit Link headers.
+    """
     import time
     from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
@@ -478,45 +495,114 @@ def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> tuple[list,
     qs["limit"] = ["250"]
     qs.pop("page", None)
     qs.pop("page_info", None)
+    base_url = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
 
-    next_url: str | None = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
-    results = []
+    results        = []
     password_locked = False
+    session        = _HTTP
 
-    session = _HTTP
-    while next_url:
-        try:
-            r = session.get(next_url, timeout=15)
-            if r.status_code == 429:
-                time.sleep(5)
-                continue
-            if r.status_code in (401, 403) or "password" in r.url:
-                password_locked = True
-                break
-            r.raise_for_status()
-            data = r.json()
-            if not isinstance(data, dict):
-                break
-            batch = data.get(key, [])
-            results.extend(batch)
+    # ── Page 1 ────────────────────────────────────────────────────────────────
+    try:
+        r = session.get(base_url, timeout=15)
+        if r.status_code == 429:
+            time.sleep(5)
+            r = session.get(base_url, timeout=15)
+        if r.status_code in (401, 403) or "password" in r.url:
+            return [], True
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, dict):
+            return [], False
+        batch = data.get(key, [])
+        results.extend(batch)
+    except Exception as e:
+        log.error(f"Failed to fetch page 1 of {url}: {e}")
+        return [], False
 
-            # Follow Shopify's cursor-based next-page link
-            next_url = None
-            link_header = r.headers.get("Link", "")
-            for part in link_header.split(","):
-                if 'rel="next"' in part:
-                    m = re.search(r"<([^>]+)>", part)
-                    if m:
-                        next_url = m.group(1)
+    # ── Decide pagination strategy from the first response ────────────────────
+    link_header = r.headers.get("Link", "")
+    next_url    = None
+    for part in link_header.split(","):
+        if 'rel="next"' in part:
+            m = re.search(r"<([^>]+)>", part)
+            if m:
+                next_url = m.group(1)
+            break
+
+    use_page_based = not next_url and len(batch) == 250
+
+    if use_page_based:
+        log.debug(f"No Link header on first page — switching to page-based pagination for {url}")
+
+    # ── Cursor-based: follow Link headers ─────────────────────────────────────
+    if not use_page_based:
+        page_num = 1
+        while next_url:
+            page_num += 1
+            time.sleep(delay)
+            try:
+                r = session.get(next_url, timeout=15)
+                if r.status_code == 429:
+                    log.warning(f"Rate limited on page {page_num}, retrying in 5s")
+                    time.sleep(5)
+                    continue
+                if r.status_code in (401, 403) or "password" in r.url:
+                    password_locked = True
                     break
+                r.raise_for_status()
+                data = r.json()
+                if not isinstance(data, dict):
+                    break
+                batch = data.get(key, [])
+                results.extend(batch)
 
-            if next_url:
-                time.sleep(delay)
-        except requests.HTTPError:
-            break
-        except Exception as e:
-            log.error(f"Failed to fetch {next_url}: {e}")
-            break
+                next_url = None
+                for part in r.headers.get("Link", "").split(","):
+                    if 'rel="next"' in part:
+                        m = re.search(r"<([^>]+)>", part)
+                        if m:
+                            next_url = m.group(1)
+                        break
+            except requests.HTTPError:
+                break
+            except Exception as e:
+                log.error(f"Failed to fetch page {page_num}: {e}")
+                break
+        log.debug(f"Cursor pagination done: {page_num} page(s), {len(results)} total {key}")
+
+    # ── Page-based: increment ?page= until empty ──────────────────────────────
+    else:
+        page_num = 1
+        qs.pop("page_info", None)
+        while True:
+            page_num += 1
+            qs["page"] = [str(page_num)]
+            page_url = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
+            time.sleep(delay)
+            try:
+                r = session.get(page_url, timeout=15)
+                if r.status_code == 429:
+                    log.warning(f"Rate limited on page {page_num}, retrying in 5s")
+                    time.sleep(5)
+                    continue
+                if r.status_code in (401, 403) or "password" in r.url:
+                    password_locked = True
+                    break
+                r.raise_for_status()
+                data = r.json()
+                if not isinstance(data, dict):
+                    break
+                batch = data.get(key, [])
+                if not batch:
+                    break
+                results.extend(batch)
+            except requests.HTTPError:
+                break
+            except Exception as e:
+                log.error(f"Failed to fetch page {page_num}: {e}")
+                break
+        log.debug(f"Page-based pagination done: {page_num - 1} page(s), {len(results)} total {key}")
+
     return results, password_locked
 
 
@@ -713,14 +799,14 @@ def _variant_size_tokens(variant_title: str) -> list[str]:
 
 
 def _sub_matches(sub: dict, store_name: str, variant: dict) -> bool:
-    """Return True if a subscription's filters match the given store + variant."""
-    if sub["stores"] and store_name not in sub["stores"]:
+    """Return True if a user/role subscription's filters match the given store + variant."""
+    if sub.get("stores") and store_name not in sub["stores"]:
         return False
-    if sub["names"]:
+    if sub.get("names"):
         search_text = (variant["title"] + " " + variant["variant_title"]).lower()
         if not all(kw.lower() in search_text for kw in sub["names"]):
             return False
-    if sub["sizes"]:
+    if sub.get("sizes"):
         vtokens = _variant_size_tokens(variant["variant_title"])
         if not any(s in vtokens for s in sub["sizes"]):
             return False
@@ -912,7 +998,7 @@ def make_sold_out_embed(store_name: str, store_url: str, variants: list) -> disc
 
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
-DEFAULT_POLL_INTERVAL = 180
+DEFAULT_POLL_INTERVAL = 300
 
 def _default_guild() -> dict:
     return {
@@ -949,6 +1035,7 @@ class RestockCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot             = bot
         self.state           = load_state()
+        self.products_cache  = load_products_cache()
         raw                  = load_bot_state()
         self.guilds: dict    = load_all_guilds()
         self._last_polled: dict  = {}   # guild_id_str → last poll timestamp
@@ -1137,6 +1224,7 @@ class RestockCog(commands.Cog):
             if not products:
                 continue
 
+            self.products_cache[url] = products
             current  = build_variant_map(products)
 
             # Fetch watched handles not already in current
@@ -1205,6 +1293,8 @@ class RestockCog(commands.Cog):
                 def _ping_for(variants_list: list) -> str | None:
                     user_ids, role_ids = set(), set()
                     for sub in gs.get("subscriptions", []):
+                        if sub.get("type") not in ("user", "role"):
+                            continue
                         for v in variants_list:
                             if _sub_matches(sub, store_name, v):
                                 (user_ids if sub["type"] == "user" else role_ids).add(sub["target_id"])
@@ -1221,20 +1311,16 @@ class RestockCog(commands.Cog):
                     log.info(f"AGGREGATE ({alert_count} items) @ {store_name} → guild {guild_id_str}")
                 else:
                     for variants in restocked.values():
-                        atc = ATCView(url, variants)
                         await channel.send(
                             content=_ping_for(variants),
                             embed=make_restock_embed(store_name, url, variants),
-                            view=atc if atc.has_buttons else None,
                         )
                         log.info(f"RESTOCK: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
                     for variants in new_items.values():
-                        atc = ATCView(url, variants)
                         await channel.send(
                             content=_ping_for(variants),
                             embed=make_new_item_embed(store_name, url, variants),
-                            view=atc if atc.has_buttons else None,
                         )
                         log.info(f"NEW ITEM: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
@@ -1247,6 +1333,7 @@ class RestockCog(commands.Cog):
                     log.info(f"REMOVED: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
         save_state(self.state)
+        save_products_cache(self.products_cache)
 
         # Stamp last polled time for all due guilds
         for gid in due_guilds:
@@ -2181,9 +2268,9 @@ class RestockCog(commands.Cog):
 
             del self._legacy_state
 
-        # Migrate guilds still on the old 60s default to 180s
+        # Migrate guilds on old defaults (60s or 180s) up to 300s
         for gid, gs in self.guilds.items():
-            if gs.get("poll_interval") == 60:
+            if gs.get("poll_interval") in (60, 180):
                 gs["poll_interval"] = DEFAULT_POLL_INTERVAL
                 self.persist(gid)
                 log.info(f"Updated poll_interval for guild {gid} to {DEFAULT_POLL_INTERVAL}s")

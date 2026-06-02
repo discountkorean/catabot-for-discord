@@ -250,7 +250,7 @@ class WatchSizePicker(discord.ui.View):
     def build_embed(self) -> discord.Embed:
         embed = discord.Embed(
             title=self.product_title, url=self.product_url, color=0x5865F2,
-            description="Select the sizes you want to watch, then click **Confirm**.",
+            description="Select the variants you want to watch, then click **Confirm**.",
         )
         if self.image_url:
             embed.set_thumbnail(url=self.image_url)
@@ -857,7 +857,7 @@ def _format_sizes(variant_titles: list[str]) -> tuple[str, str]:
     filtered = [t for t in variant_titles if t.lower() != "default title"]
     if not filtered:
         return "Variants", "N/A"
-    return "Sizes", ", ".join(filtered)
+    return "Variants", ", ".join(filtered)
 
 
 def _product_url(store_url: str, handle: str) -> str:
@@ -970,7 +970,7 @@ def make_new_item_embed(store_name: str, store_url: str, variants: list) -> disc
     )
     if first.get("image_url"):
         embed.set_thumbnail(url=first["image_url"])
-    embed.add_field(name="Sizes" if has_variants else "Variants", value=size_lines or "N/A", inline=True)
+    embed.add_field(name="Variants", value=size_lines or "N/A", inline=True)
     embed.add_field(name="Price", value=price,             inline=True)
     embed.add_field(name="Store", value=store_name,        inline=True)
     embed.add_field(name="Link",  value=_product_url(store_url, first["handle"]), inline=False)
@@ -1487,7 +1487,7 @@ class RestockCog(commands.Cog):
     @app_commands.describe(
         store_name="Only notify for this store (leave blank for all stores)",
         names="Comma-separated keywords — item must contain ALL of them (e.g. black,zip-up)",
-        sizes="Comma-separated sizes — item must match ANY (e.g. small,xs)",
+        sizes="Comma-separated variants — item must match ANY (e.g. small,xs)",
     )
     @app_commands.autocomplete(store_name=_store_autocomplete)
     async def tracker_subscribe(self, interaction: discord.Interaction,
@@ -1535,7 +1535,7 @@ class RestockCog(commands.Cog):
         embed.add_field(name="ID",     value=f"`{sub['id']}`",                                inline=True)
         embed.add_field(name="Store",  value=store_name or "All stores",                      inline=True)
         embed.add_field(name="Names",  value=", ".join(name_list) if name_list else "Any",    inline=False)
-        embed.add_field(name="Sizes",  value=", ".join(size_list) if size_list else "Any",    inline=False)
+        embed.add_field(name="Variants",  value=", ".join(size_list) if size_list else "Any",    inline=False)
         embed.set_footer(text=f"Use /rst unsubscribe {sub['id']} to remove  •  {bot_footer()}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -1584,13 +1584,13 @@ class RestockCog(commands.Cog):
         )
         for s in subs:
             if s["type"] == "watch":
-                sizes = ", ".join(s.get("variant_titles", [])) or "All sizes"
+                sizes = ", ".join(s.get("variant_titles", [])) or "All variants"
                 lines = [f"👀 **[{s['store']}]** {s['handle']} ({sizes})"]
             else:
                 lines = [
                     f"**Store:** {', '.join(s['stores']) if s['stores'] else 'All'}",
                     f"**Names:** {', '.join(s['names']) if s['names'] else 'Any'}",
-                    f"**Sizes:** {', '.join(s['sizes']) if s['sizes'] else 'Any'}",
+                    f"**Variants:** {', '.join(s['sizes']) if s['sizes'] else 'Any'}",
                 ]
             embed.add_field(name=f"`{s['id']}`", value="\n".join(lines), inline=False)
         embed.set_footer(text=bot_footer())
@@ -1619,7 +1619,7 @@ class RestockCog(commands.Cog):
         def _sub_line(s: dict) -> str:
             filters = []
             if s["names"]: filters.append(f"names: {', '.join(s['names'])}")
-            if s["sizes"]: filters.append(f"sizes: {', '.join(s['sizes'])}")
+            if s["sizes"]: filters.append(f"variants: {', '.join(s['sizes'])}")
             return " · ".join(filters) if filters else "all items"
 
         user_lines = []
@@ -1667,7 +1667,7 @@ class RestockCog(commands.Cog):
                     store_label = ", ".join(s["stores"]) if s["stores"] else "All stores"
                     filters = []
                     if s["names"]: filters.append(f"names: {', '.join(s['names'])}")
-                    if s["sizes"]: filters.append(f"sizes: {', '.join(s['sizes'])}")
+                    if s["sizes"]: filters.append(f"variants: {', '.join(s['sizes'])}")
                     filter_str = " · ".join(filters) if filters else "all items"
                     user_lines.append(f"**{store_label}** — {filter_str} `[{s['id']}]`")
             if user_lines:
@@ -1915,7 +1915,7 @@ class RestockCog(commands.Cog):
         target="User or role to subscribe",
         store_name="Only notify for this store (leave blank for all)",
         names="Comma-separated keywords — item must contain ALL of them",
-        sizes="Comma-separated sizes — item must match ANY",
+        sizes="Comma-separated variants — item must match ANY",
     )
     @app_commands.autocomplete(store_name=_store_autocomplete)
     async def admin_subscribe(self, interaction: discord.Interaction,
@@ -1965,7 +1965,7 @@ class RestockCog(commands.Cog):
                               timestamp=datetime.now(ZoneInfo("UTC")))
         embed.add_field(name="Store", value=store_name or "All stores",                   inline=True)
         embed.add_field(name="Names", value=", ".join(name_list) if name_list else "Any", inline=True)
-        embed.add_field(name="Sizes", value=", ".join(size_list) if size_list else "Any", inline=True)
+        embed.add_field(name="Variants", value=", ".join(size_list) if size_list else "Any", inline=True)
         if created:
             embed.add_field(name="✅ Created", value="\n".join(f"{t.mention} `[{id}]`" for t, id in created), inline=False)
         if skipped:
@@ -2132,7 +2132,7 @@ class RestockCog(commands.Cog):
         paginator = SearchPaginator(results, cog=self, guild_id=interaction.guild_id)
         await interaction.followup.send(embed=paginator.build_embed(), view=paginator)
 
-    @tracker.command(name="watch", description="Watch a product for restocks — get a DM when your size drops")
+    @tracker.command(name="watch", description="Watch a product for restocks — get a DM when your variant drops")
     @app_commands.describe(store_name="Store to search", query="Product name or keyword")
     @app_commands.autocomplete(store_name=_store_autocomplete)
     async def tracker_watch(self, interaction: discord.Interaction, store_name: str, query: str):

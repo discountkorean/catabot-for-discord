@@ -131,7 +131,7 @@ class CatalogPaginator(discord.ui.View):
             price = f"${min(float(v['price']) for v in variants):.2f}" if variants else "N/A"
             lines.append(f"{dot} **{item['title']}** — {price}")
         embed.description = "\n".join(lines)
-        embed.set_footer(text=f"Page {self.page + 1} of {len(self.pages)}  •  {bot_footer()} • {domain}")
+        embed.set_footer(text=f"🟢 In Stock  🟠 Partial  🔴 Sold Out  •  Page {self.page + 1} of {len(self.pages)}  •  {bot_footer()} • {domain}")
         return embed
 
     @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)

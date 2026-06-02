@@ -117,7 +117,7 @@ def build_game_embed(detail: dict, page: int, total: int) -> discord.Embed:
     if meta_score:
         embed.add_field(name="Metacritic", value=f"{meta_score}/100", inline=True)
 
-    embed.add_field(name="Store Page", value=store_url, inline=False)
+    embed.add_field(name="Store Page", value=f"[View on Steam]({store_url})", inline=False)
     embed.set_footer(text=f"Steam  •  Result {page} of {total}")
     return embed
 
@@ -178,11 +178,13 @@ class SteamCog(commands.Cog):
             await interaction.followup.send(f"❌ Could not retrieve game details for **{query}**.")
             return
 
-        await interaction.followup.send(
-            content=f"Found **{len(details)}** game(s) matching **\"{query}\"**:",
-            embed=build_game_embed(details[0], 1, len(details)),
-            view=SteamPaginator(details) if len(details) > 1 else None,
-        )
+        embed = build_game_embed(details[0], 1, len(details))
+        content = f"Found **{len(details)}** game(s) matching **\"{query}\"**:"
+
+        if len(details) > 1:
+            await interaction.followup.send(content=content, embed=embed, view=SteamPaginator(details))
+        else:
+            await interaction.followup.send(content=content, embed=embed)
 
 
 async def setup(bot: commands.Bot):

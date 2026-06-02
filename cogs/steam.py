@@ -110,14 +110,14 @@ def build_game_embed(detail: dict, page: int, total: int) -> discord.Embed:
     if header:
         embed.set_thumbnail(url=header)
 
-    embed.add_field(name="💰 Price",    value=price_str or "N/A",           inline=True)
-    embed.add_field(name="📅 Released", value=rel_date,                     inline=True)
-    embed.add_field(name="🖥️ Platforms", value=plat_icons or "Unknown",    inline=True)
+    embed.add_field(name="Price",     value=price_str or "N/A",    inline=True)
+    embed.add_field(name="Released",  value=rel_date,               inline=True)
+    embed.add_field(name="Platforms", value=plat_icons or "Unknown", inline=True)
 
     if meta_score:
-        embed.add_field(name="🎯 Metacritic", value=f"{meta_score}/100", inline=True)
+        embed.add_field(name="Metacritic", value=f"{meta_score}/100", inline=True)
 
-    embed.add_field(name="🔗 Store Page", value=store_url, inline=False)
+    embed.add_field(name="Store Page", value=store_url, inline=False)
     embed.set_footer(text=f"Steam  •  Result {page} of {total}")
     return embed
 

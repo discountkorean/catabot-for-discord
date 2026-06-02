@@ -289,6 +289,23 @@ def _normalize_product_js(p: dict) -> dict:
     return p
 
 
+def _fetch_watched_handles_sync(base: str, handles: list[str]) -> list:
+    """Fetch a list of product handles via /products/{handle}.js. Returns normalized product dicts."""
+    products = []
+    for handle in handles:
+        try:
+            r = requests.get(f"{base}/products/{handle}.js", headers=HEADERS, timeout=10)
+            if r.status_code == 404:
+                products.append({"handle": handle, "_removed": True})
+                continue
+            if not r.ok:
+                continue
+            products.append(_normalize_product_js(r.json()))
+        except Exception as e:
+            log.error(f"Failed to fetch watched handle {handle}: {e}")
+    return products
+
+
 def _search_suggest_sync(base: str, query: str, limit: int = 10) -> list:
     """
     Query /search/suggest.json for product handles, then fetch each product's

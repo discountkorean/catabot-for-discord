@@ -908,6 +908,28 @@ class RestockCog(commands.Cog):
                 continue
 
             current  = build_variant_map(products)
+
+            # Fetch watched handles not already in current
+            base = _base_url(url)
+            watch_subs = [
+                s for gs in self.guilds.values()
+                for s in gs.get("subscriptions", [])
+                if s.get("type") == "watch" and s.get("store") in gs.get("stores", {})
+                and gs["stores"].get(s["store"]) == url
+            ]
+            watched_handles = list({s["handle"] for s in watch_subs} - {v["handle"] for v in current.values()})
+            if watched_handles:
+                watched_products = await asyncio.to_thread(_fetch_watched_handles_sync, base, watched_handles)
+                removed_handles = set()
+                for wp in watched_products:
+                    if wp.get("_removed"):
+                        removed_handles.add(wp["handle"])
+                        continue
+                    current.update(build_variant_map([wp]))
+                # DM watchers of removed products and delete their watches
+                if removed_handles:
+                    await self._notify_removed_watches(url, removed_handles)
+
             previous = self.state.get(url)
 
             # Cold-start: seed silently, no alerts
@@ -932,6 +954,10 @@ class RestockCog(commands.Cog):
                     removed.setdefault(info["handle"], []).append(info)
 
             self.state[url] = current
+
+            # DM users whose watched variants just restocked
+            if restocked and watch_subs:
+                await self._dispatch_watch_dms(url, restocked, watch_subs)
 
             if not restocked and not new_items and not sold_out and not removed:
                 continue
@@ -985,6 +1011,63 @@ class RestockCog(commands.Cog):
         # Stamp last polled time for all due guilds
         for gid in due_guilds:
             self._last_polled[gid] = now
+
+    async def _notify_removed_watches(self, store_url: str, removed_handles: set[str]):
+        """DM watchers of removed products and delete their watch subscriptions."""
+        for guild_id_str, gs in self.guilds.items():
+            store_name = next((n for n, u in gs.get("stores", {}).items() if u == store_url), None)
+            if not store_name:
+                continue
+            watches_to_remove = []
+            for s in gs.get("subscriptions", []):
+                if s.get("type") != "watch" or s.get("handle") not in removed_handles:
+                    continue
+                watches_to_remove.append(s["id"])
+                try:
+                    user = await self.bot.fetch_user(s["target_id"])
+                    await user.send(f"👀 A product you were watching has been removed from **{store_name}**: `{s['handle']}`\nYour watch has been automatically deleted.")
+                except discord.Forbidden:
+                    log.warning(f"Cannot DM user {s['target_id']} about removed watch")
+                except Exception as e:
+                    log.error(f"Failed to notify user of removed watch: {e}")
+            if watches_to_remove:
+                gs["subscriptions"] = [s for s in gs["subscriptions"] if s["id"] not in watches_to_remove]
+                self.persist(int(guild_id_str))
+
+    async def _dispatch_watch_dms(self, store_url: str, restocked: dict, watch_subs: list[dict]):
+        """DM users whose watched variant IDs appear in the restocked dict."""
+        # Build a flat map of variant_id -> variant info for restocked variants
+        restocked_vids = {}
+        for variants in restocked.values():
+            for v in variants:
+                restocked_vids[str(v.get("variant_id", ""))] = v
+
+        store_name = None
+        for gs in self.guilds.values():
+            store_name = next((n for n, u in gs.get("stores", {}).items() if u == store_url), None)
+            if store_name:
+                break
+
+        for sub in watch_subs:
+            matched = [restocked_vids[vid] for vid in sub.get("variant_ids", []) if vid in restocked_vids]
+            if not matched:
+                continue
+            try:
+                user = await self.bot.fetch_user(sub["target_id"])
+                embed = make_restock_embed(store_name or sub["store"], store_url, matched)
+                embed.title = f"👀 {embed.title}"
+                embed.set_footer(text=f"You're watching this product  •  {bot_footer()}")
+                await user.send(embed=embed)
+                log.info(f"Watch DM sent to {sub['target_id']} for {sub['handle']}")
+            except discord.Forbidden:
+                log.warning(f"DMs disabled for user {sub['target_id']}, removing watch {sub['id']}")
+                for gs in self.guilds.values():
+                    before = len(gs.get("subscriptions", []))
+                    gs["subscriptions"] = [s for s in gs.get("subscriptions", []) if s["id"] != sub["id"]]
+                    if len(gs["subscriptions"]) != before:
+                        self.persist(int(list(self.guilds.keys())[list(self.guilds.values()).index(gs)]))
+            except Exception as e:
+                log.error(f"Failed to send watch DM to {sub['target_id']}: {e}")
 
     @poll.before_loop
     async def before_poll(self):

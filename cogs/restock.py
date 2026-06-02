@@ -1065,22 +1065,17 @@ class RestockCog(commands.Cog):
 
     @admin.command(name="subscribe", description="Create a filtered subscription for a user or role")
     @app_commands.describe(
-        user="User to subscribe",
-        role="Role to subscribe",
+        target="User or role to subscribe",
         store_name="Only notify for this store (leave blank for all)",
         names="Comma-separated keywords — item must contain ALL of them",
         sizes="Comma-separated sizes — item must match ANY",
     )
     @app_commands.autocomplete(store_name=_store_autocomplete)
     async def admin_subscribe(self, interaction: discord.Interaction,
-                              user: discord.Member = None, role: discord.Role = None,
+                              target: discord.abc.Mentionable,
                               store_name: str = None, names: str = None, sizes: str = None):
         await interaction.response.defer(ephemeral=True)
         gs = self._guild(interaction.guild_id)
-
-        if not user and not role:
-            await interaction.followup.send("❌ Provide a `user` or `role`.", ephemeral=True)
-            return
 
         stores = self._guild_stores(interaction.guild_id)
         if store_name and store_name not in stores:
@@ -1090,10 +1085,9 @@ class RestockCog(commands.Cog):
         name_list  = [k.strip().lower() for k in names.split(",") if k.strip()] if names else []
         size_list  = [_normalize_size(s) for s in sizes.split(",") if s.strip()] if sizes else []
         store_list = [store_name] if store_name else []
+        target_type = "role" if isinstance(target, discord.Role) else "user"
 
-        targets = []
-        if user: targets.append(("user", user))
-        if role: targets.append(("role", role))
+        targets = [(target_type, target)]
 
         created, skipped = [], []
         for target_type, target in targets:

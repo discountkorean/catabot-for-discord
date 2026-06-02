@@ -6,6 +6,7 @@ import json
 import requests
 import asyncio
 import logging
+import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import os
@@ -200,16 +201,22 @@ async def fetch_products(url: str) -> list:
 
 def _probe_shopify_sync(url: str) -> bool:
     """Return True if the URL is a valid, reachable Shopify products.json endpoint."""
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=10)
-        if r.status_code in (401, 403) or "password" in r.url:
+    for attempt in range(2):
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=20)
+            if r.status_code in (401, 403) or "password" in r.url:
+                return False
+            if not r.ok:
+                return False
+            data = r.json()
+            return isinstance(data, dict) and "products" in data
+        except requests.exceptions.Timeout:
+            if attempt == 0:
+                continue
             return False
-        if not r.ok:
+        except Exception:
             return False
-        data = r.json()
-        return isinstance(data, dict) and "products" in data
-    except Exception:
-        return False
+    return False
 
 
 async def discover_shopify_url(raw: str) -> str | None:
@@ -261,6 +268,89 @@ def build_variant_map(products: list) -> dict:
                 "image_url":     image_url,
             }
     return variants
+
+
+# ── Size normalization ────────────────────────────────────────────────────────
+
+_SIZE_ALIASES: dict[str, str] = {
+    # XS
+    "xs": "xs", "xsmall": "xs", "xsm": "xs", "xsmall": "xs",
+    "xsmall": "xs", "x-small": "xs", "xsmall": "xs", "extrasmall": "xs", "extra-small": "xs",
+    # S
+    "s": "s", "small": "s", "sm": "s",
+    # M
+    "m": "m", "med": "m", "medium": "m",
+    # L
+    "l": "l", "large": "l", "lg": "l",
+    # XL
+    "xl": "xl", "xlarge": "xl", "x-large": "xl", "extralarge": "xl", "extra-large": "xl",
+    # 2XL
+    "2xl": "2xl", "xxl": "2xl", "xxlarge": "2xl", "2xlarge": "2xl", "doublexl": "2xl", "double-xl": "2xl",
+    # 3XL
+    "3xl": "3xl", "xxxl": "3xl", "3xlarge": "3xl", "triplexl": "3xl", "triple-xl": "3xl",
+    # 4XL+
+    "4xl": "4xl", "xxxxl": "4xl",
+    "5xl": "5xl",
+}
+
+
+def _normalize_size(token: str) -> str:
+    """Normalize a size token to a canonical form for comparison."""
+    cleaned = token.lower().strip().replace(" ", "").replace("-", "").replace("_", "")
+    return _SIZE_ALIASES.get(cleaned, cleaned)
+
+
+def _variant_size_tokens(variant_title: str) -> list[str]:
+    """Extract and normalize size tokens from a Shopify variant title like 'Black / Small'."""
+    parts = []
+    for segment in variant_title.replace(",", "/").split("/"):
+        parts.append(_normalize_size(segment.strip()))
+    return parts
+
+
+def _sub_matches(sub: dict, store_name: str, variant: dict) -> bool:
+    """Return True if a subscription's filters match the given store + variant."""
+    if sub["stores"] and store_name not in sub["stores"]:
+        return False
+    if sub["names"]:
+        search_text = (variant["title"] + " " + variant["variant_title"]).lower()
+        if not all(kw.lower() in search_text for kw in sub["names"]):
+            return False
+    if sub["sizes"]:
+        vtokens = _variant_size_tokens(variant["variant_title"])
+        if not any(s in vtokens for s in sub["sizes"]):
+            return False
+    return True
+
+
+def _migrate_notifications(gs: dict) -> bool:
+    """
+    Convert legacy notifications dict to subscriptions list in-place.
+    Returns True if migration occurred.
+    """
+    if "notifications" not in gs:
+        return False
+    changed = False
+    subs = gs.setdefault("subscriptions", [])
+    existing_ids = {(s["type"], s["target_id"]) for s in subs}
+    for store_name, notifs in gs["notifications"].items():
+        if isinstance(notifs, list):
+            notifs = {"users": notifs, "roles": []}
+        for uid in notifs.get("users", []):
+            if ("user", uid) not in existing_ids:
+                subs.append({"id": uuid.uuid4().hex[:8], "type": "user", "target_id": uid,
+                             "stores": [store_name], "names": [], "sizes": []})
+                existing_ids.add(("user", uid))
+                changed = True
+        for rid in notifs.get("roles", []):
+            if ("role", rid) not in existing_ids:
+                subs.append({"id": uuid.uuid4().hex[:8], "type": "role", "target_id": rid,
+                             "stores": [store_name], "names": [], "sizes": []})
+                existing_ids.add(("role", rid))
+                changed = True
+    if changed:
+        del gs["notifications"]
+    return changed
 
 
 # ── Embeds ────────────────────────────────────────────────────────────────────
@@ -381,7 +471,7 @@ def _default_guild() -> dict:
     return {
         "alert_channel_id": None,
         "stores":           {},
-        "notifications":    {},
+        "subscriptions":    [],
         "poll_interval":    DEFAULT_POLL_INTERVAL,
     }
 
@@ -408,11 +498,15 @@ class RestockCog(commands.Cog):
         # Migrate legacy extra_stores → stores
         if "extra_stores" in gs and "stores" not in gs:
             gs["stores"] = gs.pop("extra_stores")
-            save_guild_state(key, gs)
         # Ensure all expected keys exist
         gs.setdefault("stores", {})
-        gs.setdefault("notifications", {})
+        gs.setdefault("subscriptions", [])
         gs.setdefault("poll_interval", DEFAULT_POLL_INTERVAL)
+        # Migrate old notifications dict → subscriptions list
+        if "notifications" in gs:
+            if _migrate_notifications(gs):
+                save_guild_state(key, gs)
+                log.info(f"Migrated notifications → subscriptions for guild {key}")
         return gs
 
     def _guild_stores(self, guild_id: int) -> dict:
@@ -520,19 +614,22 @@ class RestockCog(commands.Cog):
                 if store_name not in gs.get("stores", {}):
                     continue
 
-                notifs = gs.get("notifications", {}).get(store_name, {})
-                if isinstance(notifs, list):
-                    notifs = {"users": notifs, "roles": []}
-                pings = [f"<@{uid}>" for uid in notifs.get("users", [])] + \
-                        [f"<@&{rid}>" for rid in notifs.get("roles", [])]
-                ping = " ".join(pings) if pings else None
+                def _ping_for(variants_list: list) -> str | None:
+                    user_ids, role_ids = set(), set()
+                    for sub in gs.get("subscriptions", []):
+                        for v in variants_list:
+                            if _sub_matches(sub, store_name, v):
+                                (user_ids if sub["type"] == "user" else role_ids).add(sub["target_id"])
+                                break
+                    parts = [f"<@{uid}>" for uid in user_ids] + [f"<@&{rid}>" for rid in role_ids]
+                    return " ".join(parts) if parts else None
 
                 for variants in restocked.values():
-                    await channel.send(content=ping, embed=make_restock_embed(store_name, url, variants))
+                    await channel.send(content=_ping_for(variants), embed=make_restock_embed(store_name, url, variants))
                     log.info(f"RESTOCK: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
                 for variants in new_items.values():
-                    await channel.send(content=ping, embed=make_new_item_embed(store_name, url, variants))
+                    await channel.send(content=_ping_for(variants), embed=make_new_item_embed(store_name, url, variants))
                     log.info(f"NEW ITEM: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
                 for variants in sold_out.values():
@@ -595,32 +692,113 @@ class RestockCog(commands.Cog):
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed)
 
-    @tracker.command(name="notify", description="Toggle restock ping notifications for yourself")
-    @app_commands.describe(store_name="Store to toggle notifications for")
+    @tracker.command(name="subscribe", description="Subscribe to restock alerts with optional filters")
+    @app_commands.describe(
+        store_name="Only notify for this store (leave blank for all stores)",
+        names="Comma-separated keywords — item must contain ALL of them (e.g. black,zip-up)",
+        sizes="Comma-separated sizes — item must match ANY (e.g. small,xs)",
+    )
     @app_commands.autocomplete(store_name=_store_autocomplete)
-    async def tracker_notify(self, interaction: discord.Interaction, store_name: str):
+    async def tracker_subscribe(self, interaction: discord.Interaction,
+                                store_name: str = None,
+                                names: str = None,
+                                sizes: str = None):
         await interaction.response.defer(ephemeral=True)
         gs     = self._guild(interaction.guild_id)
         stores = self._guild_stores(interaction.guild_id)
 
-        if store_name not in stores:
+        if store_name and store_name not in stores:
             await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.", ephemeral=True)
             return
 
-        notifs = gs["notifications"].setdefault(store_name, {"users": [], "roles": []})
-        if isinstance(notifs, list):
-            notifs = {"users": notifs, "roles": []}
-            gs["notifications"][store_name] = notifs
+        name_list  = [k.strip().lower() for k in names.split(",") if k.strip()] if names else []
+        size_list  = [_normalize_size(s) for s in sizes.split(",") if s.strip()] if sizes else []
+        store_list = [store_name] if store_name else []
 
-        uid = interaction.user.id
-        if uid in notifs["users"]:
-            notifs["users"].remove(uid)
-            self.persist(interaction.guild_id)
-            await interaction.followup.send(f"🔕 You'll no longer be pinged for restocks at **{store_name}**.", ephemeral=True)
-        else:
-            notifs["users"].append(uid)
-            self.persist(interaction.guild_id)
-            await interaction.followup.send(f"🔔 You'll be pinged whenever **{store_name}** restocks.", ephemeral=True)
+        duplicate = next((s for s in gs["subscriptions"]
+                          if s["type"] == "user"
+                          and s["target_id"] == interaction.user.id
+                          and sorted(s["stores"]) == sorted(store_list)
+                          and sorted(s["names"])  == sorted(name_list)
+                          and sorted(s["sizes"])  == sorted(size_list)), None)
+        if duplicate:
+            await interaction.followup.send(
+                f"You already have an identical subscription `[{duplicate['id']}]`. Use `/rst subscriptions` to view yours.",
+                ephemeral=True,
+            )
+            return
+
+        sub = {
+            "id":        uuid.uuid4().hex[:8],
+            "type":      "user",
+            "target_id": interaction.user.id,
+            "stores":    store_list,
+            "names":     name_list,
+            "sizes":     size_list,
+        }
+        gs["subscriptions"].append(sub)
+        self.persist(interaction.guild_id)
+
+        embed = discord.Embed(title="🔔 Subscription Created", color=0x57F287,
+                              timestamp=datetime.now(ZoneInfo("UTC")))
+        embed.add_field(name="ID",     value=f"`{sub['id']}`",                                inline=True)
+        embed.add_field(name="Store",  value=store_name or "All stores",                      inline=True)
+        embed.add_field(name="Names",  value=", ".join(name_list) if name_list else "Any",    inline=False)
+        embed.add_field(name="Sizes",  value=", ".join(size_list) if size_list else "Any",    inline=False)
+        embed.set_footer(text=f"Use /rst unsubscribe {sub['id']} to remove  •  {bot_footer()}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @tracker.command(name="unsubscribe", description="Remove one of your subscriptions by ID")
+    @app_commands.describe(sub_id="Subscription ID shown in /rst subscriptions")
+    async def tracker_unsubscribe(self, interaction: discord.Interaction, sub_id: str):
+        await interaction.response.defer(ephemeral=True)
+        gs      = self._guild(interaction.guild_id)
+        is_admin = interaction.user.guild_permissions.administrator
+
+        before = len(gs["subscriptions"])
+        gs["subscriptions"] = [
+            s for s in gs["subscriptions"]
+            if not (s["id"] == sub_id and (is_admin or (s["type"] == "user" and s["target_id"] == interaction.user.id)))
+        ]
+
+        if len(gs["subscriptions"]) == before:
+            await interaction.followup.send(f"❌ No subscription with ID `{sub_id}` found (or it's not yours).", ephemeral=True)
+            return
+
+        self.persist(interaction.guild_id)
+        await interaction.followup.send(f"✅ Removed subscription `{sub_id}`.", ephemeral=True)
+
+    @tracker.command(name="subscriptions", description="List your active subscriptions")
+    @app_commands.describe(user="User to inspect (admin only; defaults to you)")
+    async def tracker_subscriptions(self, interaction: discord.Interaction, user: discord.Member = None):
+        await interaction.response.defer(ephemeral=True)
+        gs     = self._guild(interaction.guild_id)
+        target = user or interaction.user
+
+        if user and user != interaction.user and not interaction.user.guild_permissions.administrator:
+            await interaction.followup.send("❌ Only admins can view other users' subscriptions.", ephemeral=True)
+            return
+
+        subs = [s for s in gs["subscriptions"] if s["type"] == "user" and s["target_id"] == target.id]
+
+        if not subs:
+            await interaction.followup.send(f"No active subscriptions for {target.mention}.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title=f"🔔 Subscriptions for {target.display_name}",
+            color=0x5865F2,
+            timestamp=datetime.now(ZoneInfo("UTC")),
+        )
+        for s in subs:
+            lines = [
+                f"**Store:** {', '.join(s['stores']) if s['stores'] else 'All'}",
+                f"**Names:** {', '.join(s['names']) if s['names'] else 'Any'}",
+                f"**Sizes:** {', '.join(s['sizes']) if s['sizes'] else 'Any'}",
+            ]
+            embed.add_field(name=f"`{s['id']}`", value="\n".join(lines), inline=False)
+        embed.set_footer(text=bot_footer())
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @tracker.command(name="store", description="Show subscribers and info for a store")
     @app_commands.describe(store_name="Store to inspect")
@@ -637,53 +815,62 @@ class RestockCog(commands.Cog):
         store_url = stores[store_name]
         domain    = _display_domain(store_url.split("/")[2])
         base_url  = f"https://{domain}"
-        notifs    = gs["notifications"].get(store_name, {})
-        if isinstance(notifs, list):
-            notifs = {"users": notifs, "roles": []}
+
+        relevant = [s for s in gs.get("subscriptions", []) if not s["stores"] or store_name in s["stores"]]
+        user_subs = [s for s in relevant if s["type"] == "user"]
+        role_subs = [s for s in relevant if s["type"] == "role"]
+
+        def _sub_line(s: dict) -> str:
+            filters = []
+            if s["names"]: filters.append(f"names: {', '.join(s['names'])}")
+            if s["sizes"]: filters.append(f"sizes: {', '.join(s['sizes'])}")
+            return " · ".join(filters) if filters else "all items"
 
         user_lines = []
-        for uid in notifs.get("users", []):
-            member = interaction.guild.get_member(uid)
-            user_lines.append(member.mention if member else f"<@{uid}>")
+        for s in user_subs:
+            member = interaction.guild.get_member(s["target_id"])
+            mention = member.mention if member else f"<@{s['target_id']}>"
+            user_lines.append(f"{mention} — {_sub_line(s)} `[{s['id']}]`")
 
         role_lines = []
-        for rid in notifs.get("roles", []):
-            role = interaction.guild.get_role(rid)
-            role_lines.append(role.mention if role else f"<@&{rid}>")
+        for s in role_subs:
+            role = interaction.guild.get_role(s["target_id"])
+            mention = role.mention if role else f"<@&{s['target_id']}>"
+            role_lines.append(f"{mention} — {_sub_line(s)} `[{s['id']}]`")
 
         embed = discord.Embed(title=f"🏪 {store_name}", url=base_url, color=0x5865F2, timestamp=datetime.now(ZoneInfo("UTC")))
-        embed.add_field(name="URL",              value=base_url,                                              inline=False)
-        embed.add_field(name="👤 Subscribed Users", value="\n".join(user_lines) if user_lines else "None",   inline=False)
-        embed.add_field(name="🏷️ Subscribed Roles", value="\n".join(role_lines) if role_lines else "None",  inline=False)
+        embed.add_field(name="URL", value=base_url, inline=False)
+        embed.add_field(name=f"👤 Users ({len(user_lines)})", value="\n".join(user_lines) if user_lines else "None", inline=False)
+        embed.add_field(name=f"🏷️ Roles ({len(role_lines)})", value="\n".join(role_lines) if role_lines else "None", inline=False)
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed)
 
-    @tracker.command(name="user", description="Show which stores a user is subscribed to")
+    @tracker.command(name="user", description="Show a user's subscriptions")
     @app_commands.describe(user="User to inspect (defaults to you)")
     async def tracker_user(self, interaction: discord.Interaction, user: discord.Member = None):
         await interaction.response.defer()
         gs     = self._guild(interaction.guild_id)
         target = user or interaction.user
-        uid    = target.id
         stores = self._guild_stores(interaction.guild_id)
 
-        subscribed = []
-        for store_name, notifs in gs["notifications"].items():
-            if isinstance(notifs, list):
-                if uid in notifs:
-                    subscribed.append(store_name)
-            elif uid in notifs.get("users", []):
-                subscribed.append(store_name)
+        subs = [s for s in gs.get("subscriptions", []) if s["type"] == "user" and s["target_id"] == target.id]
 
         embed = discord.Embed(title=target.display_name, color=0x5865F2, timestamp=datetime.now(ZoneInfo("UTC")))
         embed.set_thumbnail(url=target.display_avatar.url)
         embed.add_field(name="Username", value=str(target), inline=True)
 
-        if subscribed:
-            lines = [f"[{n}](https://{_display_domain(stores[n].split('/')[2])})" for n in subscribed if n in stores]
-            embed.add_field(name=f"🔔 Subscribed Stores ({len(subscribed)})", value="\n".join(lines) or "None", inline=False)
+        if subs:
+            lines = []
+            for s in subs:
+                store_label = ", ".join(s["stores"]) if s["stores"] else "All stores"
+                filters = []
+                if s["names"]: filters.append(f"names: {', '.join(s['names'])}")
+                if s["sizes"]: filters.append(f"sizes: {', '.join(s['sizes'])}")
+                filter_str = " · ".join(filters) if filters else "all items"
+                lines.append(f"**{store_label}** — {filter_str} `[{s['id']}]`")
+            embed.add_field(name=f"🔔 Subscriptions ({len(subs)})", value="\n".join(lines), inline=False)
         else:
-            embed.add_field(name="🔔 Subscribed Stores", value="None", inline=False)
+            embed.add_field(name="🔔 Subscriptions", value="None", inline=False)
 
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed)
@@ -816,7 +1003,9 @@ class RestockCog(commands.Cog):
 
         import base64
         try:
-            stores = json.loads(base64.urlsafe_b64decode(code.encode()).decode())
+            padded = code.strip()
+            padded += '=' * (-len(padded) % 4)
+            stores = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
             if not isinstance(stores, dict):
                 raise ValueError
         except Exception:
@@ -874,48 +1063,82 @@ class RestockCog(commands.Cog):
         if not_found: lines.append("❌ Not found: " + ", ".join(f"**{n}**" for n in not_found))
         await interaction.followup.send("\n".join(lines) or "No changes made.")
 
-    @admin.command(name="notify", description="Toggle restock ping notifications for a user or role")
-    @app_commands.describe(store_name="Store to toggle", user="User to toggle", role="Role to toggle")
+    @admin.command(name="subscribe", description="Create a filtered subscription for a user or role")
+    @app_commands.describe(
+        user="User to subscribe",
+        role="Role to subscribe",
+        store_name="Only notify for this store (leave blank for all)",
+        names="Comma-separated keywords — item must contain ALL of them",
+        sizes="Comma-separated sizes — item must match ANY",
+    )
     @app_commands.autocomplete(store_name=_store_autocomplete)
-    async def admin_notify(self, interaction: discord.Interaction, store_name: str,
-                           user: discord.Member = None, role: discord.Role = None):
+    async def admin_subscribe(self, interaction: discord.Interaction,
+                              user: discord.Member = None, role: discord.Role = None,
+                              store_name: str = None, names: str = None, sizes: str = None):
         await interaction.response.defer(ephemeral=True)
         gs = self._guild(interaction.guild_id)
 
         if not user and not role:
-            await interaction.followup.send("❌ Provide a `user` or `role`. To toggle yourself use `/rst notify`.", ephemeral=True)
+            await interaction.followup.send("❌ Provide a `user` or `role`.", ephemeral=True)
             return
 
         stores = self._guild_stores(interaction.guild_id)
-        if store_name not in stores:
+        if store_name and store_name not in stores:
             await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.", ephemeral=True)
             return
 
-        notifs = gs["notifications"].setdefault(store_name, {"users": [], "roles": []})
-        if isinstance(notifs, list):
-            notifs = {"users": notifs, "roles": []}
-            gs["notifications"][store_name] = notifs
+        name_list   = [k.strip().lower() for k in names.split(",") if k.strip()] if names else []
+        size_list   = [_normalize_size(s) for s in sizes.split(",") if s.strip()] if sizes else []
+        store_list  = [store_name] if store_name else []
+        target      = user or role
+        target_type = "user" if user else "role"
 
-        if role:
-            rid = role.id
-            if rid in notifs["roles"]:
-                notifs["roles"].remove(rid)
-                self.persist(interaction.guild_id)
-                await interaction.followup.send(f"🔕 {role.mention} will no longer be pinged for **{store_name}**.", ephemeral=True)
-            else:
-                notifs["roles"].append(rid)
-                self.persist(interaction.guild_id)
-                await interaction.followup.send(f"🔔 {role.mention} will be pinged whenever **{store_name}** restocks.", ephemeral=True)
-        else:
-            uid = user.id
-            if uid in notifs["users"]:
-                notifs["users"].remove(uid)
-                self.persist(interaction.guild_id)
-                await interaction.followup.send(f"🔕 {user.mention} will no longer be pinged for **{store_name}**.", ephemeral=True)
-            else:
-                notifs["users"].append(uid)
-                self.persist(interaction.guild_id)
-                await interaction.followup.send(f"🔔 {user.mention} will be pinged whenever **{store_name}** restocks.", ephemeral=True)
+        duplicate = next((s for s in gs["subscriptions"]
+                          if s["type"] == target_type
+                          and s["target_id"] == target.id
+                          and sorted(s["stores"]) == sorted(store_list)
+                          and sorted(s["names"])  == sorted(name_list)
+                          and sorted(s["sizes"])  == sorted(size_list)), None)
+        if duplicate:
+            await interaction.followup.send(
+                f"An identical subscription already exists for {target.mention} `[{duplicate['id']}]`.",
+                ephemeral=True,
+            )
+            return
+
+        sub = {
+            "id":        uuid.uuid4().hex[:8],
+            "type":      target_type,
+            "target_id": target.id,
+            "stores":    store_list,
+            "names":     name_list,
+            "sizes":     size_list,
+        }
+        gs["subscriptions"].append(sub)
+        self.persist(interaction.guild_id)
+
+        embed = discord.Embed(title="🔔 Subscription Created", color=0x57F287,
+                              timestamp=datetime.now(ZoneInfo("UTC")))
+        embed.add_field(name="Target", value=target.mention,                                  inline=True)
+        embed.add_field(name="ID",     value=f"`{sub['id']}`",                                inline=True)
+        embed.add_field(name="Store",  value=store_name or "All stores",                      inline=True)
+        embed.add_field(name="Names",  value=", ".join(name_list) if name_list else "Any",    inline=False)
+        embed.add_field(name="Sizes",  value=", ".join(size_list) if size_list else "Any",    inline=False)
+        embed.set_footer(text=bot_footer())
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @admin.command(name="unsubscribe", description="Remove any subscription by ID")
+    @app_commands.describe(sub_id="Subscription ID to remove")
+    async def admin_unsubscribe(self, interaction: discord.Interaction, sub_id: str):
+        await interaction.response.defer(ephemeral=True)
+        gs     = self._guild(interaction.guild_id)
+        before = len(gs["subscriptions"])
+        gs["subscriptions"] = [s for s in gs["subscriptions"] if s["id"] != sub_id]
+        if len(gs["subscriptions"]) == before:
+            await interaction.followup.send(f"❌ No subscription with ID `{sub_id}` found.", ephemeral=True)
+            return
+        self.persist(interaction.guild_id)
+        await interaction.followup.send(f"✅ Removed subscription `{sub_id}`.", ephemeral=True)
 
     @admin.command(name="recent", description="Post the most recently updated item from a store")
     @app_commands.describe(store_name="Store to check", channel="Channel to post in (defaults to tracker channel)")
@@ -992,11 +1215,13 @@ class RestockCog(commands.Cog):
         fake_variants = [{"title": "Debug Product", "variant_title": "M", "price": "99.99",
                           "handle": "debug-product", "image_url": None, "available": True}]
 
-        notifs = gs["notifications"].get(store_name, {})
-        if isinstance(notifs, list):
-            notifs = {"users": notifs, "roles": []}
-        pings = [f"<@{uid}>" for uid in notifs.get("users", [])] + \
-                [f"<@&{rid}>" for rid in notifs.get("roles", [])]
+        user_ids, role_ids = set(), set()
+        for sub in gs.get("subscriptions", []):
+            for v in fake_variants:
+                if _sub_matches(sub, store_name, v):
+                    (user_ids if sub["type"] == "user" else role_ids).add(sub["target_id"])
+                    break
+        pings = [f"<@{uid}>" for uid in user_ids] + [f"<@&{rid}>" for rid in role_ids]
         ping  = " ".join(pings) if pings else None
 
         embed       = make_restock_embed(store_name, store_url, fake_variants)
@@ -1057,19 +1282,12 @@ class RestockCog(commands.Cog):
         gs = self.guilds.get(guild_id)
         if not gs:
             return
-        changed = False
-        for notifs in gs.get("notifications", {}).values():
-            if isinstance(notifs, list):
-                if uid in notifs:
-                    notifs.remove(uid)
-                    changed = True
-            else:
-                if uid in notifs.get("users", []):
-                    notifs["users"].remove(uid)
-                    changed = True
-        if changed:
+        before = len(gs.get("subscriptions", []))
+        gs["subscriptions"] = [s for s in gs.get("subscriptions", [])
+                                if not (s["type"] == "user" and s["target_id"] == uid)]
+        if len(gs["subscriptions"]) != before:
             self.persist(guild_id)
-            log.info(f"Purged all data for user {uid} from guild {guild_id}")
+            log.info(f"Purged all subscriptions for user {uid} from guild {guild_id}")
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):

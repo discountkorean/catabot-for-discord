@@ -1072,7 +1072,7 @@ class RestockCog(commands.Cog):
     )
     @app_commands.autocomplete(store_name=_store_autocomplete)
     async def admin_subscribe(self, interaction: discord.Interaction,
-                              target: discord.abc.Mentionable,
+                              target: discord.Member | discord.Role,
                               store_name: str = None, names: str = None, sizes: str = None):
         await interaction.response.defer(ephemeral=True)
         gs = self._guild(interaction.guild_id)

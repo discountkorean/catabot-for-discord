@@ -340,6 +340,59 @@ class CatalogPaginator(discord.ui.View):
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
 
+ALERT_TYPES = [
+    ("restock",  "🔁 Restock"),
+    ("new_item", "🆕 New Item"),
+    ("sold_out", "🔴 Sold Out"),
+    ("removed",  "🗑️ Removed"),
+]
+
+def _default_store_alerts() -> dict:
+    return {k: True for k, _ in ALERT_TYPES}
+
+
+class AlertToggleView(discord.ui.View):
+    """4 toggle buttons shown on /rst store — enable/disable alert types per store."""
+
+    def __init__(self, cog, guild_id: int, store_name: str):
+        super().__init__(timeout=300)
+        self.cog        = cog
+        self.guild_id   = guild_id
+        self.store_name = store_name
+        self._rebuild()
+
+    def _alerts(self) -> dict:
+        gs = self.cog._guild(self.guild_id)
+        return gs.setdefault("store_alerts", {}).setdefault(
+            self.store_name, _default_store_alerts()
+        )
+
+    def _rebuild(self):
+        self.clear_items()
+        alerts = self._alerts()
+        for key, label in ALERT_TYPES:
+            enabled = alerts.get(key, True)
+            btn = discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.secondary,
+                custom_id=f"alert_toggle_{key}",
+            )
+            btn.callback = self._make_callback(key)
+            self.add_item(btn)
+
+    def _make_callback(self, key: str):
+        async def callback(interaction: discord.Interaction):
+            gs     = self.cog._guild(self.guild_id)
+            alerts = gs.setdefault("store_alerts", {}).setdefault(
+                self.store_name, _default_store_alerts()
+            )
+            alerts[key] = not alerts.get(key, True)
+            self.cog.persist(self.guild_id)
+            self._rebuild()
+            await interaction.response.edit_message(view=self)
+        return callback
+
+
 class ATCView(discord.ui.View):
     """Link-button row for Add-to-Cart on restock/new-item alerts."""
 
@@ -1078,6 +1131,7 @@ class RestockCog(commands.Cog):
         gs.setdefault("forum_threads", {})
         gs.setdefault("subscriptions", [])
         gs.setdefault("poll_interval", DEFAULT_POLL_INTERVAL)
+        gs.setdefault("store_alerts", {})
         # Migrate old notifications dict → subscriptions list
         if "notifications" in gs:
             if _migrate_notifications(gs):
@@ -1319,15 +1373,31 @@ class RestockCog(commands.Cog):
                     parts = [f"<@{uid}>" for uid in user_ids] + [f"<@&{rid}>" for rid in role_ids]
                     return " ".join(parts) if parts else None
 
+                alerts = gs.get("store_alerts", {}).get(store_name, _default_store_alerts())
+
+                def _alert_enabled(key: str, variants_list: list) -> bool:
+                    """True if the alert type is toggled on, OR any subscription matches these variants."""
+                    if alerts.get(key, True):
+                        return True
+                    subs = gs.get("subscriptions", [])
+                    return any(
+                        _sub_matches(sub, store_name, v)
+                        for sub in subs if sub.get("type") in ("user", "role")
+                        for v in variants_list
+                    )
+
                 try:
                     alert_count = len(restocked) + len(new_items)
                     if alert_count > AGGREGATE_THRESHOLD:
                         all_variants = [v for vlist in list(restocked.values()) + list(new_items.values()) for v in vlist]
-                        ping = _ping_for(all_variants)
-                        await channel.send(content=ping, embed=make_aggregate_embed(store_name, url, restocked, new_items))
-                        log.info(f"AGGREGATE ({alert_count} items) @ {store_name} → guild {guild_id_str}")
+                        if _alert_enabled("restock", all_variants) or _alert_enabled("new_item", all_variants):
+                            ping = _ping_for(all_variants)
+                            await channel.send(content=ping, embed=make_aggregate_embed(store_name, url, restocked, new_items))
+                            log.info(f"AGGREGATE ({alert_count} items) @ {store_name} → guild {guild_id_str}")
                     else:
                         for variants in restocked.values():
+                            if not _alert_enabled("restock", variants):
+                                continue
                             await channel.send(
                                 content=_ping_for(variants),
                                 embed=make_restock_embed(store_name, url, variants),
@@ -1335,6 +1405,8 @@ class RestockCog(commands.Cog):
                             log.info(f"RESTOCK: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
                         for variants in new_items.values():
+                            if not _alert_enabled("new_item", variants):
+                                continue
                             await channel.send(
                                 content=_ping_for(variants),
                                 embed=make_new_item_embed(store_name, url, variants),
@@ -1342,10 +1414,14 @@ class RestockCog(commands.Cog):
                             log.info(f"NEW ITEM: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
                     if sold_out:
-                        await channel.send(embed=make_sold_out_embed(store_name, url, sold_out))
-                        log.info(f"SOLD OUT: {len(sold_out)} product(s) @ {store_name} → guild {guild_id_str}")
+                        all_sold = [v for vlist in sold_out.values() for v in vlist]
+                        if _alert_enabled("sold_out", all_sold):
+                            await channel.send(embed=make_sold_out_embed(store_name, url, sold_out))
+                            log.info(f"SOLD OUT: {len(sold_out)} product(s) @ {store_name} → guild {guild_id_str}")
 
                     for variants in removed.values():
+                        if not _alert_enabled("removed", variants):
+                            continue
                         await channel.send(embed=make_removed_embed(store_name, url, variants))
                         log.info(f"REMOVED: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
@@ -1640,7 +1716,8 @@ class RestockCog(commands.Cog):
         embed.add_field(name=f"👤 Users ({len(user_lines)})", value="\n".join(user_lines) if user_lines else "None", inline=False)
         embed.add_field(name=f"🏷️ Roles ({len(role_lines)})", value="\n".join(role_lines) if role_lines else "None", inline=False)
         embed.set_footer(text=bot_footer())
-        await interaction.followup.send(embed=embed)
+        view = AlertToggleView(self, interaction.guild_id, store_name)
+        await interaction.followup.send(embed=embed, view=view)
 
     @tracker.command(name="user", description="Show a user's subscriptions")
     @app_commands.describe(user="User to inspect (defaults to you)")

@@ -1053,6 +1053,27 @@ class RestockCog(commands.Cog):
     # ── Startup ───────────────────────────────────────────────────────────────
 
     @commands.Cog.listener()
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """Remove a user's subscriptions from this guild when they leave."""
+        guild_id = str(member.guild.id)
+        gs       = self.guilds.get(guild_id)
+        if not gs:
+            return
+        uid     = member.id
+        changed = False
+        for store_name, notifs in gs.get("notifications", {}).items():
+            if isinstance(notifs, list):
+                if uid in notifs:
+                    notifs.remove(uid)
+                    changed = True
+            elif uid in notifs.get("users", []):
+                notifs["users"].remove(uid)
+                changed = True
+        if changed:
+            self.persist(guild_id)
+            log.info(f"Removed subscriptions for departed user {uid} from guild {guild_id}")
+
     async def on_ready(self):
         # Purge stale name-keyed entries from stock_state (legacy format pre URL-keying)
         stale_keys = [k for k in self.state if not k.startswith("http")]

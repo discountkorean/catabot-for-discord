@@ -255,6 +255,24 @@ class SteamCog(commands.Cog):
     async def cog_unload(self):
         self.check_sales.cancel()
 
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """Remove wishlist if user is no longer in any guild the bot serves."""
+        uid = str(member.id)
+        # Check if user is still in any other guild the bot is in
+        still_present = any(
+            member.id in [m.id for m in guild.members]
+            for guild in self.bot.guilds
+            if guild.id != member.guild.id
+        )
+        if still_present:
+            return
+        wishlists = load_wishlists()
+        if uid in wishlists:
+            del wishlists[uid]
+            save_wishlists(wishlists)
+            log.info(f"Removed Steam wishlist for departed user {uid}")
+
     # ── Commands ──────────────────────────────────────────────────────────────
 
     @steam.command(name="search", description="Search for a game on Steam")

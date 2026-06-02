@@ -101,6 +101,9 @@ class SearchPaginator(discord.ui.View):
         r         = self.results[self.page]
         stores    = self.cog._guild_stores(self.guild_id)
         store_url = stores.get(r.store_name, "")
+        if not store_url:
+            await interaction.response.send_message("Could not find store for this product.", ephemeral=True)
+            return
         base      = _base_url(store_url)
         product   = await asyncio.to_thread(
             lambda: _normalize_product_js(

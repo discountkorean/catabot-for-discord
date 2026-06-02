@@ -92,6 +92,61 @@ class SearchPaginator(discord.ui.View):
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
 
+CATALOG_PAGE_SIZE = 15
+
+
+class CatalogPaginator(discord.ui.View):
+    def __init__(self, store_name: str, store_url: str, pages: list[list[dict]]):
+        super().__init__(timeout=180)
+        self.store_name = store_name
+        self.store_url  = store_url
+        self.pages      = pages
+        self.page       = 0
+        self._update_buttons()
+
+    def _update_buttons(self):
+        self.prev_btn.disabled = self.page == 0
+        self.next_btn.disabled = self.page == len(self.pages) - 1
+
+    def build_embed(self) -> discord.Embed:
+        items  = self.pages[self.page]
+        domain = _display_domain(self.store_url.split("/")[2])
+        embed  = discord.Embed(
+            title=f"🛍️ {self.store_name} Catalog",
+            url=f"https://{domain}",
+            color=0x5865F2,
+            timestamp=datetime.now(ZoneInfo("UTC")),
+        )
+        lines = []
+        for item in items:
+            variants  = item["variants"]
+            n_avail   = sum(1 for v in variants if v.get("available"))
+            n_total   = len(variants)
+            if n_avail == n_total:
+                dot = "🟢"
+            elif n_avail == 0:
+                dot = "🔴"
+            else:
+                dot = "🟠"
+            price = f"${min(float(v['price']) for v in variants):.2f}" if variants else "N/A"
+            lines.append(f"{dot} **{item['title']}** — {price}")
+        embed.description = "\n".join(lines)
+        embed.set_footer(text=f"Page {self.page + 1} of {len(self.pages)}  •  {bot_footer()} • {domain}")
+        return embed
+
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page -= 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page += 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+
 BASE_DIR       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILE    = os.path.join(BASE_DIR, "config.toml")
 DATA_DIR       = os.path.join(BASE_DIR, "data")
@@ -1466,6 +1521,35 @@ class RestockCog(commands.Cog):
         results   = results[:MAX_SEARCH_RESULTS]
         paginator = SearchPaginator(results)
         await interaction.followup.send(embed=paginator.build_embed(), view=paginator)
+
+    @tracker.command(name="catalog", description="Browse all products at a store with stock status")
+    @app_commands.describe(store_name="Store to browse")
+    @app_commands.autocomplete(store_name=_store_autocomplete)
+    async def tracker_catalog(self, interaction: discord.Interaction, store_name: str):
+        await interaction.response.defer()
+        stores = self._guild_stores(interaction.guild_id)
+
+        if store_name not in stores:
+            await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.", ephemeral=True)
+            return
+
+        products = await fetch_products(stores[store_name])
+        if not products:
+            await interaction.followup.send(f"❌ Could not fetch products from **{store_name}**.", ephemeral=True)
+            return
+
+        # Sort: in-stock first, partial second, out-of-stock last
+        def _stock_order(p):
+            variants = p.get("variants", [])
+            n = sum(1 for v in variants if v.get("available"))
+            if n == len(variants): return 0
+            if n == 0:             return 2
+            return 1
+
+        products = sorted(products, key=_stock_order)
+        pages    = [products[i:i + CATALOG_PAGE_SIZE] for i in range(0, len(products), CATALOG_PAGE_SIZE)]
+        view     = CatalogPaginator(store_name, stores[store_name], pages)
+        await interaction.followup.send(embed=view.build_embed(), view=view)
 
     # ── Startup ───────────────────────────────────────────────────────────────
 

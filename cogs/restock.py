@@ -6,6 +6,7 @@ import json
 import requests
 import asyncio
 import logging
+import re
 import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -108,7 +109,7 @@ class SearchPaginator(discord.ui.View):
         try:
             product = await asyncio.to_thread(
                 lambda: _normalize_product_js(
-                    requests.get(f"{base}/products/{r.handle}.js", headers=HEADERS, timeout=10).json()
+                    requests.Session().get(f"{base}/products/{r.handle}.js", headers=HEADERS, timeout=10).json()
                 )
             )
         except Exception:
@@ -338,6 +339,31 @@ class CatalogPaginator(discord.ui.View):
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
 
+class ATCView(discord.ui.View):
+    """Link-button row for Add-to-Cart on restock/new-item alerts."""
+
+    def __init__(self, store_url: str, variants: list[dict]):
+        super().__init__(timeout=None)
+        from urllib.parse import urlparse
+        p       = urlparse(store_url)
+        base    = f"{p.scheme}://{p.netloc}"
+        domain  = _display_domain(p.netloc)
+        available = [v for v in variants if v.get("available") and v.get("variant_id")]
+        for v in available[:20]:
+            label = v.get("variant_title", "")
+            if not label or label.lower() == "default title":
+                label = "Buy Now"
+            self.add_item(discord.ui.Button(
+                label=label[:80],
+                url=f"https://{domain}/cart/{v['variant_id']}:1",
+                style=discord.ButtonStyle.link,
+            ))
+
+    @property
+    def has_buttons(self) -> bool:
+        return len(self.children) > 0
+
+
 BASE_DIR       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILE    = os.path.join(BASE_DIR, "config.toml")
 DATA_DIR       = os.path.join(BASE_DIR, "data")
@@ -346,7 +372,12 @@ BOT_STATE_FILE = os.path.join(DATA_DIR, "bot_state.json")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+HEADERS = {
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Cache-Control":   "no-cache, no-store, must-revalidate",
+    "Pragma":          "no-cache",
+    "Expires":         "0",
+}
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
@@ -431,43 +462,58 @@ def _base_url(url: str) -> str:
     return f"{p.scheme}://{p.netloc}"
 
 
-def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> list:
-    """Fetch all pages of a Shopify endpoint using ?page=N pagination."""
+def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> tuple[list, bool]:
+    """Fetch all pages of a Shopify endpoint using cursor-based Link header pagination.
+    Returns (results, password_locked)."""
     import time
     from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
     parsed = urlparse(url)
     qs = parse_qs(parsed.query, keep_blank_values=True)
     qs["limit"] = ["250"]
+    qs.pop("page", None)
+    qs.pop("page_info", None)
 
+    next_url: str | None = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
     results = []
-    page = 1
-    while True:
-        qs["page"] = [str(page)]
-        paged_url = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
-        try:
-            r = requests.get(paged_url, headers=HEADERS, timeout=15)
-            if r.status_code == 429:
-                time.sleep(5)
-                continue
-            if r.status_code in (401, 403) or "password" in r.url:
+    password_locked = False
+
+    with requests.Session() as session:
+        session.headers.update(HEADERS)
+        while next_url:
+            try:
+                r = session.get(next_url, timeout=15)
+                if r.status_code == 429:
+                    time.sleep(5)
+                    continue
+                if r.status_code in (401, 403) or "password" in r.url:
+                    password_locked = True
+                    break
+                r.raise_for_status()
+                data = r.json()
+                if not isinstance(data, dict):
+                    break
+                batch = data.get(key, [])
+                results.extend(batch)
+
+                # Follow Shopify's cursor-based next-page link
+                next_url = None
+                link_header = r.headers.get("Link", "")
+                for part in link_header.split(","):
+                    if 'rel="next"' in part:
+                        m = re.search(r"<([^>]+)>", part)
+                        if m:
+                            next_url = m.group(1)
+                        break
+
+                if next_url:
+                    time.sleep(delay)
+            except requests.HTTPError:
                 break
-            r.raise_for_status()
-            data = r.json()
-            if not isinstance(data, dict):
+            except Exception as e:
+                log.error(f"Failed to fetch {next_url}: {e}")
                 break
-            batch = data.get(key, [])
-            results.extend(batch)
-            if len(batch) < 250:
-                break
-            page += 1
-            time.sleep(delay)
-        except requests.HTTPError:
-            break
-        except Exception as e:
-            log.error(f"Failed to fetch {paged_url}: {e}")
-            break
-    return results
+    return results, password_locked
 
 
 def _normalize_product_js(p: dict) -> dict:
@@ -484,17 +530,19 @@ def _normalize_product_js(p: dict) -> dict:
 def _fetch_watched_handles_sync(base: str, handles: list[str]) -> list:
     """Fetch a list of product handles via /products/{handle}.js. Returns normalized product dicts."""
     products = []
-    for handle in handles:
-        try:
-            r = requests.get(f"{base}/products/{handle}.js", headers=HEADERS, timeout=10)
-            if r.status_code == 404:
-                products.append({"handle": handle, "_removed": True})
-                continue
-            if not r.ok:
-                continue
-            products.append(_normalize_product_js(r.json()))
-        except Exception as e:
-            log.error(f"Failed to fetch watched handle {handle}: {e}")
+    with requests.Session() as session:
+        session.headers.update(HEADERS)
+        for handle in handles:
+            try:
+                r = session.get(f"{base}/products/{handle}.js", timeout=10)
+                if r.status_code == 404:
+                    products.append({"handle": handle, "_removed": True})
+                    continue
+                if not r.ok:
+                    continue
+                products.append(_normalize_product_js(r.json()))
+            except Exception as e:
+                log.error(f"Failed to fetch watched handle {handle}: {e}")
     return products
 
 
@@ -504,133 +552,74 @@ def _search_suggest_sync(base: str, query: str, limit: int = 10) -> list:
     full variant data via /products/{handle}.js. Returns a list of product dicts
     in the same shape as products.json items.
     """
-    try:
-        r = requests.get(
-            f"{base}/search/suggest.json",
-            params={
-                "q": query,
-                "resources[type]": "product",
-                "resources[limit]": limit,
-                "resources[options][unavailable_products]": "show",
-                "resources[options][fields]": "title,variants.title,vendor",
-            },
-            headers=HEADERS,
-            timeout=10,
-        )
-        if not r.ok:
-            return []
-        handles = [
-            p["handle"]
-            for p in r.json().get("resources", {}).get("results", {}).get("products", [])
-            if p.get("handle")
-        ]
-    except Exception as e:
-        log.error(f"suggest failed for {base}: {e}")
-        return []
-
-    products = []
-    for handle in handles:
+    with requests.Session() as session:
+        session.headers.update(HEADERS)
         try:
-            rp = requests.get(f"{base}/products/{handle}.js", headers=HEADERS, timeout=10)
-            if not rp.ok:
-                continue
-            p = rp.json()
-            products.append(_normalize_product_js(p))
+            r = session.get(
+                f"{base}/search/suggest.json",
+                params={
+                    "q": query,
+                    "resources[type]": "product",
+                    "resources[limit]": limit,
+                    "resources[options][unavailable_products]": "show",
+                    "resources[options][fields]": "title,variants.title,vendor",
+                },
+                timeout=10,
+            )
+            if not r.ok:
+                return []
+            handles = [
+                p["handle"]
+                for p in r.json().get("resources", {}).get("results", {}).get("products", [])
+                if p.get("handle")
+            ]
         except Exception as e:
-            log.error(f"product .js fetch failed for {base}/products/{handle}: {e}")
-    return products
+            log.error(f"suggest failed for {base}: {e}")
+            return []
+
+        products = []
+        for handle in handles:
+            try:
+                rp = session.get(f"{base}/products/{handle}.js", timeout=10)
+                if not rp.ok:
+                    continue
+                products.append(_normalize_product_js(rp.json()))
+            except Exception as e:
+                log.error(f"product .js fetch failed for {base}/products/{handle}: {e}")
+        return products
 
 
 async def search_suggest(base: str, query: str) -> list:
     return await asyncio.to_thread(_search_suggest_sync, base, query)
 
 
-def _fetch_products_sync(url: str) -> list:
-    """
-    Deep-fetch all products for a store:
-    1. Enumerate all collections via collections.json
-    2. Fetch products from each collection handle (deduped by product ID)
-    3. Top up with products.json to catch anything not in a collection
-    """
-    import time
-
+async def fetch_products(url: str) -> tuple[list, bool]:
+    """Fetch all products for a store. Returns (products, password_locked)."""
     base = _base_url(url)
-
-    # Step 1: get all collection handles
-    collections = _fetch_paginated_sync(f"{base}/collections.json", "collections", delay=0.5)
-    handles = [c["handle"] for c in collections if c.get("handle")]
-    log.info(f"[deep-fetch] {base}: {len(handles)} collections found")
-
-    # Step 2: fetch products from each collection, dedupe by product ID
-    seen_ids: set = set()
-    all_products: list = []
-
-    for handle in handles:
-        col_url = f"{base}/collections/{handle}/products.json?limit=250"
-        try:
-            r = requests.get(col_url, headers=HEADERS, timeout=15)
-            batch = r.json().get("products", []) if r.ok else []
-        except Exception as e:
-            log.error(f"[deep-fetch] collection {handle} fetch failed: {e}")
-            batch = []
-        added = 0
-        for p in batch:
-            pid = p.get("id")
-            if pid and pid not in seen_ids:
-                seen_ids.add(pid)
-                all_products.append(p)
-                added += 1
-        if added:
-            log.info(f"[deep-fetch] /{handle}: +{added} new products ({len(all_products)} total)")
-        time.sleep(0.1)
-
-    # Step 3: top up with products.json
-    top_up = _fetch_paginated_sync(f"{base}/products.json", "products", delay=0.5)
-    added = 0
-    for p in top_up:
-        pid = p.get("id")
-        if pid and pid not in seen_ids:
-            seen_ids.add(pid)
-            all_products.append(p)
-            added += 1
-    if added:
-        log.info(f"[deep-fetch] products.json top-up: +{added} ({len(all_products)} total)")
-
-    log.info(f"[deep-fetch] {base}: complete — {len(all_products)} unique products")
-    return all_products
-
-
-async def fetch_products(url: str) -> list:
-    return await asyncio.to_thread(_fetch_products_sync, url)
-
-
-def _fetch_products_fast_sync(url: str) -> list:
-    """Fetch all products via products.json pagination only — no collection traversal."""
-    base = _base_url(url)
-    return _fetch_paginated_sync(f"{base}/products.json", "products", delay=0.3)
-
-
-async def fetch_products_fast(url: str) -> list:
-    return await asyncio.to_thread(_fetch_products_fast_sync, url)
+    return await asyncio.to_thread(
+        _fetch_paginated_sync, f"{base}/products.json", "products", 0.5
+    )
 
 
 def _probe_shopify_sync(url: str) -> bool:
     """Return True if the URL is a valid, reachable Shopify products.json endpoint."""
-    for attempt in range(2):
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=20)
-            if r.status_code in (401, 403) or "password" in r.url:
+    with requests.Session() as session:
+        session.headers.update(HEADERS)
+        for attempt in range(2):
+            try:
+                r = session.get(url, timeout=20)
+                if r.status_code in (401, 403) or "password" in r.url:
+                    return False
+                if not r.ok:
+                    return False
+                data = r.json()
+                return isinstance(data, dict) and "products" in data
+            except requests.exceptions.Timeout:
+                if attempt == 0:
+                    continue
                 return False
-            if not r.ok:
+            except Exception:
                 return False
-            data = r.json()
-            return isinstance(data, dict) and "products" in data
-        except requests.exceptions.Timeout:
-            if attempt == 0:
-                continue
-            return False
-        except Exception:
-            return False
     return False
 
 
@@ -936,13 +925,34 @@ def _default_guild() -> dict:
     }
 
 
+def make_password_embed(store_name: str, store_url: str, locked: bool) -> discord.Embed:
+    domain = _display_domain(store_url.split("/")[2])
+    if locked:
+        embed = discord.Embed(
+            title=f"🔒 Store Locked: {store_name}",
+            description="The store is now password-protected. This often signals an upcoming drop.",
+            color=0xED4245,
+            timestamp=datetime.now(ZoneInfo("UTC")),
+        )
+    else:
+        embed = discord.Embed(
+            title=f"🔓 Store Live: {store_name}",
+            description="The password page is down — the store is accessible again.",
+            color=0x57F287,
+            timestamp=datetime.now(ZoneInfo("UTC")),
+        )
+    embed.set_footer(text=f"{bot_footer()} • {domain}")
+    return embed
+
+
 class RestockCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
-        self.bot        = bot
-        self.state      = load_state()
-        raw             = load_bot_state()
-        self.guilds: dict      = load_all_guilds()
-        self._last_polled: dict = {}   # guild_id_str → last poll timestamp
+        self.bot             = bot
+        self.state           = load_state()
+        raw                  = load_bot_state()
+        self.guilds: dict    = load_all_guilds()
+        self._last_polled: dict  = {}   # guild_id_str → last poll timestamp
+        self.password_state: dict[str, bool] = {}  # store_url → currently locked
 
         # Detect legacy single-guild format and migrate in on_ready
         if not self.guilds and ("alert_channel_id" in raw or "guilds" in raw):
@@ -1110,7 +1120,20 @@ class RestockCog(commands.Cog):
 
         for store_name, url in due_stores.items():
             log.info(f"Checking {store_name}...")
-            products = await fetch_products(url)
+            products, password_locked = await fetch_products(url)
+
+            # ── Password page detection ───────────────────────────────────────
+            was_locked = self.password_state.get(url, False)
+            if password_locked != was_locked:
+                self.password_state[url] = password_locked
+                for gid_str, gs in due_guilds.items():
+                    if store_name not in gs.get("stores", {}):
+                        continue
+                    ch = await self._resolve_store_channel(gs, store_name, gid_str)
+                    if ch:
+                        await ch.send(embed=make_password_embed(store_name, url, password_locked))
+                        log.info(f"{'LOCKED' if password_locked else 'UNLOCKED'}: {store_name} → guild {gid_str}")
+
             if not products:
                 continue
 
@@ -1149,7 +1172,7 @@ class RestockCog(commands.Cog):
             for vid, info in current.items():
                 handle = info["handle"]
                 if vid not in previous:
-                    new_items.setdefault(handle, []).append(info)
+                    new_items.setdefault(handle, []).append({**info, "variant_id": vid})
                 elif not previous[vid].get("available", True) and info["available"]:
                     restocked.setdefault(handle, []).append({**info, "variant_id": vid})
                 elif previous[vid].get("available", True) and not info["available"]:
@@ -1198,11 +1221,21 @@ class RestockCog(commands.Cog):
                     log.info(f"AGGREGATE ({alert_count} items) @ {store_name} → guild {guild_id_str}")
                 else:
                     for variants in restocked.values():
-                        await channel.send(content=_ping_for(variants), embed=make_restock_embed(store_name, url, variants))
+                        atc = ATCView(url, variants)
+                        await channel.send(
+                            content=_ping_for(variants),
+                            embed=make_restock_embed(store_name, url, variants),
+                            view=atc if atc.has_buttons else None,
+                        )
                         log.info(f"RESTOCK: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
                     for variants in new_items.values():
-                        await channel.send(content=_ping_for(variants), embed=make_new_item_embed(store_name, url, variants))
+                        atc = ATCView(url, variants)
+                        await channel.send(
+                            content=_ping_for(variants),
+                            embed=make_new_item_embed(store_name, url, variants),
+                            view=atc if atc.has_buttons else None,
+                        )
                         log.info(f"NEW ITEM: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
                 for variants in sold_out.values():
@@ -1264,7 +1297,8 @@ class RestockCog(commands.Cog):
                 embed = make_restock_embed(store_name or sub["store"], store_url, matched)
                 embed.title = f"👀 {embed.title}"
                 embed.set_footer(text=f"You're watching this product  •  {bot_footer()}")
-                await user.send(embed=embed)
+                atc = ATCView(store_url, matched)
+                await user.send(embed=embed, view=atc if atc.has_buttons else None)
                 log.info(f"Watch DM sent to {sub['target_id']} for {sub['handle']}")
             except discord.Forbidden:
                 log.warning(f"DMs disabled for user {sub['target_id']}, removing watch {sub['id']}")
@@ -1868,7 +1902,7 @@ class RestockCog(commands.Cog):
             )
             return
 
-        products = await fetch_products(stores[store_name])
+        products, _ = await fetch_products(stores[store_name])
         if not products:
             await interaction.followup.send(f"❌ Could not fetch products from **{store_name}**.", ephemeral=True)
             return
@@ -2056,6 +2090,36 @@ class RestockCog(commands.Cog):
         pages    = [products[i:i + CATALOG_PAGE_SIZE] for i in range(0, len(products), CATALOG_PAGE_SIZE)]
         view     = CatalogPaginator(store_name, store_url, pages)
         await interaction.followup.send(embed=view.build_embed(), view=view)
+
+    @tracker.command(name="check", description="On-demand stock check for a specific product")
+    @app_commands.describe(store_name="Store to check", query="Product name or handle")
+    @app_commands.autocomplete(store_name=_store_autocomplete)
+    async def tracker_check(self, interaction: discord.Interaction, store_name: str, query: str):
+        await interaction.response.defer()
+        stores = self._guild_stores(interaction.guild_id)
+
+        if store_name not in stores:
+            await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.")
+            return
+
+        store_url = stores[store_name]
+        base      = _base_url(store_url)
+        products  = await search_suggest(base, query)
+
+        if not products:
+            await interaction.followup.send(f"No products found matching **{query}** in **{store_name}**.")
+            return
+
+        results = []
+        for product in products[:MAX_SEARCH_RESULTS]:
+            results.append(SearchResult(store_name, store_url, product))
+
+        paginator = SearchPaginator(results, cog=self, guild_id=interaction.guild_id)
+        await interaction.followup.send(
+            content=f"**Live stock check** — {store_name} · `{query}`",
+            embed=paginator.build_embed(),
+            view=paginator,
+        )
 
     # ── Startup ───────────────────────────────────────────────────────────────
 

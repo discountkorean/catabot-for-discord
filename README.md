@@ -77,28 +77,28 @@ All parameters optional — omitting all subscribes to everything.
 
 🟢 All sizes in stock — 🟠 Some sizes available — 🔴 Sold out
 
-### Admin (`/rst admin`)
+### Admin (`/rst-admin`)
 
 > Requires Administrator permission.
 
 | Command | Description |
 |---|---|
-| `/rst admin start [channel]` | Start monitoring and set the default alert channel |
-| `/rst admin stop` | Stop monitoring for this server |
-| `/rst admin interval [seconds]` | Set poll interval (60–600s) |
-| `/rst admin add [name] [url]` | Add a Shopify store |
-| `/rst admin remove [store...]` | Remove up to 5 stores |
-| `/rst admin channel [store] [channel]` | Set a dedicated channel, thread, or forum for a store |
-| `/rst admin subscribe [target] [store] [names] [sizes]` | Create a filtered subscription for a user or role |
-| `/rst admin unsubscribe <id>` | Remove any subscription by ID |
-| `/rst admin recent [store] [channel]` | Post the most recently updated item |
-| `/rst admin alert [store] [channel]` | Send a fake restock alert for testing |
-| `/rst admin export` | Export store list as a shareable code |
-| `/rst admin import [code]` | Import a store list from an export code |
+| `/rst-admin start [channel]` | Start monitoring and set the default alert channel |
+| `/rst-admin stop` | Stop monitoring for this server |
+| `/rst-admin interval [seconds]` | Set poll interval (60–600s) |
+| `/rst-admin add [name] [url]` | Add a Shopify store |
+| `/rst-admin remove [store...]` | Remove up to 5 stores |
+| `/rst-admin channel [store] [channel]` | Set a dedicated channel, thread, or forum for a store |
+| `/rst-admin subscribe [target] [store] [names] [sizes]` | Create a filtered subscription for a user or role |
+| `/rst-admin unsubscribe <id>` | Remove any subscription by ID |
+| `/rst-admin recent [store] [channel]` | Post the most recently updated item |
+| `/rst-admin alert [store] [channel]` | Send a fake restock alert for testing |
+| `/rst-admin export` | Export store list as a shareable code |
+| `/rst-admin import [code]` | Import a store list from an export code |
 
 #### Per-store channel routing
 
-`/rst admin channel` accepts a text channel, thread, or forum:
+`/rst-admin channel` accepts a text channel, thread, or forum:
 - **Text channel / Thread** — alerts sent directly
 - **Forum** — bot creates a `{Store} Updates` post on first alert and replies into it
 

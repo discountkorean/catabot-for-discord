@@ -839,14 +839,26 @@ class RestockCog(commands.Cog):
 
     # ── Command groups ────────────────────────────────────────────────────────
 
-    restock = app_commands.Group(name="rs",  description="Restock monitor commands")
-    tracker = app_commands.Group(name="rst", description="Restock tracker commands")
-    admin   = app_commands.Group(
-        name="admin",
+    restock   = app_commands.Group(name="rs",        description="Restock monitor commands")
+    tracker   = app_commands.Group(name="rst",       description="Restock tracker commands")
+    rst_admin = app_commands.Group(
+        name="rst-admin",
         description="Admin-only tracker commands",
-        parent=tracker,
         default_permissions=discord.Permissions(administrator=True),
     )
+
+    @tracker.command(name="help", description="Show all /rst commands")
+    async def tracker_help(self, interaction: discord.Interaction):
+        from bot import _build_help_pages, HelpPaginator
+        is_admin = interaction.user.guild_permissions.administrator
+        pages    = _build_help_pages(is_admin)
+        await interaction.response.send_message(embed=pages[1], view=HelpPaginator(pages, 1), ephemeral=True)
+
+    @rst_admin.command(name="help", description="Show all /rst-admin commands")
+    async def rst_admin_help(self, interaction: discord.Interaction):
+        from bot import _build_help_pages, HelpPaginator
+        pages = _build_help_pages(True)
+        await interaction.response.send_message(embed=pages[2], view=HelpPaginator(pages, 2), ephemeral=True)
 
     async def _store_autocomplete(self, interaction: discord.Interaction, current: str):
         stores = self._guild_stores(interaction.guild_id)
@@ -882,7 +894,7 @@ class RestockCog(commands.Cog):
                 for n in stores
             )
         else:
-            store_lines = "None — use `/rst admin add`"
+            store_lines = "None — use `/rst-admin add`"
         embed.add_field(name="Stores", value=store_lines, inline=False)
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed)
@@ -1079,11 +1091,11 @@ class RestockCog(commands.Cog):
             ch = self.bot.get_channel(ch_id)
             if ch:
                 return ch, None
-        return None, "❌ No alert channel set — run `/rst admin start` first, or pass a `channel` argument."
+        return None, "❌ No alert channel set — run `/rst-admin start` first, or pass a `channel` argument."
 
-    # ── Admin commands (/rst admin) ───────────────────────────────────────────
+    # ── Admin commands (/rst-admin) ──────────────────────────────────────────
 
-    @admin.command(name="start", description="Start monitoring and set the alert channel")
+    @rst_admin.command(name="start", description="Start monitoring and set the alert channel")
     @app_commands.describe(channel="Channel to send alerts to (defaults to current channel)")
     async def admin_start(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
         await interaction.response.defer()
@@ -1100,7 +1112,7 @@ class RestockCog(commands.Cog):
             self.poll.start()
 
         stores     = self._guild_stores(interaction.guild_id)
-        store_list = "\n".join(f"• {name}" for name in stores) or "No stores added yet — use `/rst admin add`"
+        store_list = "\n".join(f"• {name}" for name in stores) or "No stores added yet — use `/rst-admin add`"
         embed = discord.Embed(
             title="🟢 Tracker Started",
             description=f"Alerts → {alert_channel.mention}\n\n**{len(stores)}** store(s) monitored:\n{store_list}",
@@ -1110,7 +1122,7 @@ class RestockCog(commands.Cog):
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed)
 
-    @admin.command(name="channel", description="Set or clear a dedicated alert channel for a store")
+    @rst_admin.command(name="channel", description="Set or clear a dedicated alert channel for a store")
     @app_commands.describe(
         store_name="Store to configure",
         channel="Channel, thread, or forum to send alerts to (omit to revert to default)",
@@ -1150,7 +1162,7 @@ class RestockCog(commands.Cog):
             f"✅ **{store_name}** alerts → {channel.mention} ({ch_type})", ephemeral=True
         )
 
-    @admin.command(name="stop", description="Stop monitoring for this server")
+    @rst_admin.command(name="stop", description="Stop monitoring for this server")
     async def admin_stop(self, interaction: discord.Interaction):
         await interaction.response.defer()
         gs = self._guild(interaction.guild_id)
@@ -1169,7 +1181,7 @@ class RestockCog(commands.Cog):
                 self.poll.change_interval(seconds=new_min)
             await interaction.followup.send("🔴 Alerts disabled for this server.")
 
-    @admin.command(name="interval", description="Set this server's poll interval (min 60s, max 600s)")
+    @rst_admin.command(name="interval", description="Set this server's poll interval (min 60s, max 600s)")
     @app_commands.describe(seconds="Interval in seconds (min 60, max 600)")
     async def admin_interval(self, interaction: discord.Interaction, seconds: int):
         await interaction.response.defer()
@@ -1187,7 +1199,7 @@ class RestockCog(commands.Cog):
 
         await interaction.followup.send(f"✅ Poll interval for this server updated to **{seconds}s** ({seconds // 60}m {seconds % 60}s).")
 
-    @admin.command(name="add", description="Add a Shopify store to monitor")
+    @rst_admin.command(name="add", description="Add a Shopify store to monitor")
     @app_commands.describe(store_name="Display name for the store", url="Store URL (e.g. https://www.houndarchives.com)")
     async def admin_add(self, interaction: discord.Interaction, store_name: str, url: str):
         await interaction.response.defer()
@@ -1209,7 +1221,7 @@ class RestockCog(commands.Cog):
         domain = _display_domain(discovered.split("/")[2])
         await interaction.followup.send(f"✅ Added **{store_name}**\n🔗 `https://{domain}`")
 
-    @admin.command(name="export", description="Export this server's store list as a shareable code")
+    @rst_admin.command(name="export", description="Export this server's store list as a shareable code")
     async def admin_export(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         gs     = self._guild(interaction.guild_id)
@@ -1224,7 +1236,7 @@ class RestockCog(commands.Cog):
         store_list = "\n".join(f"• {name}" for name in stores)
         embed = discord.Embed(
             title="📤 Store Export",
-            description=f"Use `/rst admin import` with the attached code file on another server.\n\n**{len(stores)} store(s):**\n{store_list}",
+            description=f"Use `/rst-admin import` with the attached code file on another server.\n\n**{len(stores)} store(s):**\n{store_list}",
             color=0x5865F2,
             timestamp=datetime.now(ZoneInfo("UTC")),
         )
@@ -1232,7 +1244,7 @@ class RestockCog(commands.Cog):
         file = discord.File(io.BytesIO(code.encode()), filename="stores-export.txt")
         await interaction.followup.send(embed=embed, file=file, ephemeral=True)
 
-    @admin.command(name="import", description="Import a store list from an export code")
+    @rst_admin.command(name="import", description="Import a store list from an export code")
     @app_commands.describe(code="Export code from /rst admin export")
     async def admin_import(self, interaction: discord.Interaction, code: str):
         await interaction.response.defer(ephemeral=True)
@@ -1268,7 +1280,7 @@ class RestockCog(commands.Cog):
         if skipped: lines.append(f"⏭️ Skipped {len(skipped)} (already present by name or URL): " + ", ".join(f"**{n}**" for n in skipped))
         await interaction.followup.send("\n".join(lines) or "No stores imported.", ephemeral=True)
 
-    @admin.command(name="remove", description="Remove one or more stores from monitoring")
+    @rst_admin.command(name="remove", description="Remove one or more stores from monitoring")
     @app_commands.describe(
         store1="Store to remove", store2="Additional store", store3="Additional store",
         store4="Additional store", store5="Additional store",
@@ -1299,7 +1311,7 @@ class RestockCog(commands.Cog):
         if not_found: lines.append("❌ Not found: " + ", ".join(f"**{n}**" for n in not_found))
         await interaction.followup.send("\n".join(lines) or "No changes made.")
 
-    @admin.command(name="subscribe", description="Create a filtered subscription for a user or role")
+    @rst_admin.command(name="subscribe", description="Create a filtered subscription for a user or role")
     @app_commands.describe(
         target="User or role to subscribe",
         store_name="Only notify for this store (leave blank for all)",
@@ -1362,7 +1374,7 @@ class RestockCog(commands.Cog):
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @admin.command(name="unsubscribe", description="Remove any subscription by ID")
+    @rst_admin.command(name="unsubscribe", description="Remove any subscription by ID")
     @app_commands.describe(sub_id="Subscription ID to remove")
     async def admin_unsubscribe(self, interaction: discord.Interaction, sub_id: str):
         await interaction.response.defer(ephemeral=True)
@@ -1375,7 +1387,7 @@ class RestockCog(commands.Cog):
         self.persist(interaction.guild_id)
         await interaction.followup.send(f"✅ Removed subscription `{sub_id}`.", ephemeral=True)
 
-    @admin.command(name="recent", description="Post the most recently updated item from a store")
+    @rst_admin.command(name="recent", description="Post the most recently updated item from a store")
     @app_commands.describe(store_name="Store to check", channel="Channel to post in (defaults to tracker channel)")
     @app_commands.autocomplete(store_name=_store_autocomplete)
     async def admin_recent(self, interaction: discord.Interaction,
@@ -1393,7 +1405,7 @@ class RestockCog(commands.Cog):
             dest = await self._resolve_store_channel(gs, store_name, str(interaction.guild_id))
         if not dest:
             await interaction.followup.send(
-                "❌ No alert channel set for this store — run `/rst admin start` or `/rst admin channel`.",
+                "❌ No alert channel set for this store — run `/rst-admin start` or `/rst-admin channel`.",
                 ephemeral=True,
             )
             return
@@ -1434,7 +1446,7 @@ class RestockCog(commands.Cog):
         await dest.send(embed=embed)
         await interaction.followup.send(f"✅ Posted most recent item from **{store_name}** to {dest.mention}.", ephemeral=True)
 
-    @admin.command(name="alert", description="Send a fake restock alert to test ping notifications")
+    @rst_admin.command(name="alert", description="Send a fake restock alert to test ping notifications")
     @app_commands.describe(store_name="Store to simulate", channel="Channel to post in (defaults to tracker channel)")
     @app_commands.autocomplete(store_name=_store_autocomplete)
     async def admin_alert(self, interaction: discord.Interaction,
@@ -1453,7 +1465,7 @@ class RestockCog(commands.Cog):
             dest = await self._resolve_store_channel(gs, store_name, str(interaction.guild_id))
         if not dest:
             await interaction.followup.send(
-                "❌ No alert channel set for this store — run `/rst admin start` or `/rst admin channel`.",
+                "❌ No alert channel set for this store — run `/rst-admin start` or `/rst-admin channel`.",
                 ephemeral=True,
             )
             return

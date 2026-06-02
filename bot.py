@@ -104,8 +104,12 @@ class StockBot(commands.Bot):
         await self.load_extension("cogs.restock")
         # Skip tree.sync() on restart — commands haven't changed
         if "--restarted" not in sys.argv:
-            await self.tree.sync()
-            log.info("Slash commands synced")
+            try:
+                async with asyncio.timeout(30):
+                    await self.tree.sync()
+                log.info("Slash commands synced")
+            except asyncio.TimeoutError:
+                log.warning("tree.sync() timed out — continuing without sync")
         else:
             log.info("Restart — skipping tree.sync()")
 

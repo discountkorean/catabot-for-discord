@@ -471,6 +471,8 @@ def _default_guild() -> dict:
     return {
         "alert_channel_id": None,
         "stores":           {},
+        "channels":         {},
+        "forum_threads":    {},
         "subscriptions":    [],
         "poll_interval":    DEFAULT_POLL_INTERVAL,
     }
@@ -500,6 +502,8 @@ class RestockCog(commands.Cog):
             gs["stores"] = gs.pop("extra_stores")
         # Ensure all expected keys exist
         gs.setdefault("stores", {})
+        gs.setdefault("channels", {})
+        gs.setdefault("forum_threads", {})
         gs.setdefault("subscriptions", [])
         gs.setdefault("poll_interval", DEFAULT_POLL_INTERVAL)
         # Migrate old notifications dict → subscriptions list
@@ -518,11 +522,14 @@ class RestockCog(commands.Cog):
             stores.update(gs.get("stores", {}))
         return stores
 
+    def _guild_is_active(self, gs: dict) -> bool:
+        return bool(gs.get("alert_channel_id") or gs.get("channels"))
+
     def _min_interval(self) -> int:
         intervals = [
             gs.get("poll_interval", DEFAULT_POLL_INTERVAL)
             for gs in self.guilds.values()
-            if gs.get("alert_channel_id")
+            if self._guild_is_active(gs)
         ]
         return min(intervals) if intervals else DEFAULT_POLL_INTERVAL
 
@@ -539,6 +546,83 @@ class RestockCog(commands.Cog):
             for gid, gs in self.guilds.items():
                 save_guild_state(gid, gs)
 
+    # ── Channel resolution ────────────────────────────────────────────────────
+
+    async def _resolve_store_channel(self, gs: dict, store_name: str, guild_id_str: str = None):
+        """
+        Return a Messageable to send store alerts to.
+        Priority: per-store channel → guild default → None.
+        ForumChannels are resolved to a persistent thread named '{store_name} Updates'.
+        """
+        cid = gs.get("channels", {}).get(store_name) or gs.get("alert_channel_id")
+        if not cid:
+            return None
+        ch = self.bot.get_channel(cid)
+        if not ch:
+            return None
+        if isinstance(ch, (discord.TextChannel, discord.Thread)):
+            return ch
+        if isinstance(ch, discord.ForumChannel):
+            return await self._get_or_create_forum_thread(gs, store_name, ch, guild_id_str)
+        return None
+
+    async def _get_or_create_forum_thread(self, gs: dict, store_name: str,
+                                          forum: discord.ForumChannel, guild_id_str: str = None):
+        thread_name = f"{store_name} Updates"
+        # Try cached thread id
+        cached_id = gs.get("forum_threads", {}).get(store_name)
+        if cached_id:
+            thread = self.bot.get_channel(cached_id)
+            if thread:
+                return thread
+        # Search active threads in the forum
+        for thread in forum.threads:
+            if thread.name == thread_name:
+                gs.setdefault("forum_threads", {})[store_name] = thread.id
+                if guild_id_str:
+                    self.persist(guild_id_str)
+                return thread
+        # Create new thread
+        try:
+            thread = await forum.create_thread(
+                name=thread_name,
+                content=f"📋 Alert thread for **{store_name}**. Restocks and new drops will be posted here.",
+            )
+            # create_thread returns a ThreadWithMessage; grab the thread
+            if hasattr(thread, "thread"):
+                thread = thread.thread
+            gs.setdefault("forum_threads", {})[store_name] = thread.id
+            if guild_id_str:
+                self.persist(guild_id_str)
+            log.info(f"Created forum thread '{thread_name}' in #{forum.name}")
+            return thread
+        except Exception as e:
+            log.error(f"Failed to create forum thread for {store_name}: {e}")
+            return None
+
+    def _channel_label(self, gs: dict, store_name: str) -> str:
+        """Human-readable description of where a store's alerts go."""
+        cid = gs.get("channels", {}).get(store_name)
+        default_cid = gs.get("alert_channel_id")
+        src_id   = cid or default_cid
+        is_default = not cid
+        if not src_id:
+            return "Not set"
+        ch = self.bot.get_channel(src_id)
+        if not ch:
+            return f"Unknown (`{src_id}`)"
+        if isinstance(ch, discord.ForumChannel):
+            thread_id = gs.get("forum_threads", {}).get(store_name)
+            thread    = self.bot.get_channel(thread_id) if thread_id else None
+            post_name = thread.name if thread else f"{store_name} Updates"
+            suffix    = " (default)" if is_default else ""
+            return f"{ch.mention} › **{post_name}**{suffix}"
+        if isinstance(ch, discord.Thread):
+            suffix = " (default)" if is_default else ""
+            return f"{ch.mention} (thread){suffix}"
+        suffix = " (default)" if is_default else ""
+        return f"{ch.mention}{suffix}"
+
     # ── Poll loop ─────────────────────────────────────────────────────────────
 
     @tasks.loop(seconds=60)
@@ -554,7 +638,7 @@ class RestockCog(commands.Cog):
         # Determine which guilds are due for a poll this cycle
         due_guilds = {
             gid: gs for gid, gs in self.guilds.items()
-            if gs.get("alert_channel_id") and
+            if self._guild_is_active(gs) and
                now - self._last_polled.get(gid, 0) >= gs.get("poll_interval", DEFAULT_POLL_INTERVAL)
         }
 
@@ -603,10 +687,7 @@ class RestockCog(commands.Cog):
 
             # Route alerts to each due guild that monitors this store
             for guild_id_str, gs in due_guilds.items():
-                channel_id = gs.get("alert_channel_id")
-                if not channel_id:
-                    continue
-                channel = self.bot.get_channel(channel_id)
+                channel = await self._resolve_store_channel(gs, store_name, guild_id_str)
                 if not channel:
                     continue
 
@@ -685,10 +766,14 @@ class RestockCog(commands.Cog):
             timestamp=datetime.now(ZoneInfo("UTC")),
         )
         interval = gs.get("poll_interval", DEFAULT_POLL_INTERVAL)
-        embed.add_field(name="State",    value="🟢 Running" if running else "🔴 Stopped",  inline=True)
-        embed.add_field(name="Interval", value=f"{interval}s ({interval // 60}m)",         inline=True)
-        embed.add_field(name="Channel",  value=channel.mention if channel else "Not set",  inline=True)
-        embed.add_field(name="Stores",   value="\n".join(f"• {n}" for n in stores) or "None — use `/rst admin add`", inline=False)
+        embed.add_field(name="State",    value="🟢 Running" if running else "🔴 Stopped", inline=True)
+        embed.add_field(name="Interval", value=f"{interval}s ({interval // 60}m)",        inline=True)
+        embed.add_field(name="Default Channel", value=channel.mention if channel else "Not set", inline=True)
+        if stores:
+            store_lines = "\n".join(f"• **{n}** → {self._channel_label(gs, n)}" for n in stores)
+        else:
+            store_lines = "None — use `/rst admin add`"
+        embed.add_field(name="Stores", value=store_lines, inline=False)
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed)
 
@@ -839,7 +924,8 @@ class RestockCog(commands.Cog):
             role_lines.append(f"{mention} — {_sub_line(s)} `[{s['id']}]`")
 
         embed = discord.Embed(title=f"🏪 {store_name}", url=base_url, color=0x5865F2, timestamp=datetime.now(ZoneInfo("UTC")))
-        embed.add_field(name="URL", value=base_url, inline=False)
+        embed.add_field(name="URL",           value=base_url,                             inline=True)
+        embed.add_field(name="Alert Channel", value=self._channel_label(gs, store_name),  inline=True)
         embed.add_field(name=f"👤 Users ({len(user_lines)})", value="\n".join(user_lines) if user_lines else "None", inline=False)
         embed.add_field(name=f"🏷️ Roles ({len(role_lines)})", value="\n".join(role_lines) if role_lines else "None", inline=False)
         embed.set_footer(text=bot_footer())
@@ -914,6 +1000,46 @@ class RestockCog(commands.Cog):
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed)
 
+    @admin.command(name="channel", description="Set or clear a dedicated alert channel for a store")
+    @app_commands.describe(
+        store_name="Store to configure",
+        channel="Channel, thread, or forum to send alerts to (omit to revert to default)",
+    )
+    @app_commands.autocomplete(store_name=_store_autocomplete)
+    async def admin_channel(self, interaction: discord.Interaction, store_name: str,
+                            channel: discord.TextChannel | discord.Thread | discord.ForumChannel = None):
+        await interaction.response.defer(ephemeral=True)
+        gs     = self._guild(interaction.guild_id)
+        stores = self._guild_stores(interaction.guild_id)
+
+        if store_name not in stores:
+            await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.", ephemeral=True)
+            return
+
+        if channel is None:
+            gs["channels"].pop(store_name, None)
+            gs["forum_threads"].pop(store_name, None)
+            self.persist(interaction.guild_id)
+            await interaction.followup.send(
+                f"✅ **{store_name}** will now use the default alert channel.", ephemeral=True
+            )
+            return
+
+        gs["channels"][store_name] = channel.id
+        gs["forum_threads"].pop(store_name, None)  # clear cached thread so a fresh one is created
+        self.persist(interaction.guild_id)
+
+        if isinstance(channel, discord.ForumChannel):
+            ch_type = f"forum — will post to **{store_name} Updates** thread"
+        elif isinstance(channel, discord.Thread):
+            ch_type = "thread"
+        else:
+            ch_type = "channel"
+
+        await interaction.followup.send(
+            f"✅ **{store_name}** alerts → {channel.mention} ({ch_type})", ephemeral=True
+        )
+
     @admin.command(name="stop", description="Stop monitoring for this server")
     async def admin_stop(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -922,7 +1048,7 @@ class RestockCog(commands.Cog):
         self.persist(interaction.guild_id)
 
         # Stop the loop only if no guild has an active channel
-        any_active = any(g.get("alert_channel_id") for g in self.guilds.values())
+        any_active = any(self._guild_is_active(g) for g in self.guilds.values())
         if not any_active and self.poll.is_running():
             self.poll.cancel()
             await interaction.followup.send("🔴 Tracker stopped (no active servers remaining).")
@@ -1335,7 +1461,7 @@ class RestockCog(commands.Cog):
             del self._legacy_state
 
         # Resume poll if any guild has an active channel
-        any_active = any(g.get("alert_channel_id") for g in self.guilds.values())
+        any_active = any(self._guild_is_active(g) for g in self.guilds.values())
         if any_active and not self.poll.is_running():
             self.poll.start()
 

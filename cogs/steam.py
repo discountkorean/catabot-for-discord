@@ -220,11 +220,19 @@ class SteamCog(commands.Cog):
 
     @tasks.loop(minutes=30)
     async def check_sales(self):
+        detail_cache: dict[str, dict | None] = {}   # appid → details (fetch each game once)
+        notified: set[tuple[str, str]]       = set()  # (uid, appid) already DM'd this cycle
+
+        async def get_detail(appid: str):
+            if appid not in detail_cache:
+                detail_cache[appid] = await fetch_appdetails(int(appid))
+            return detail_cache[appid]
+
         for guild_id, wishlist in all_guild_wishlists():
             changed = False
             for uid, games in wishlist.items():
                 for appid, info in list(games.items()):
-                    detail = await fetch_appdetails(int(appid))
+                    detail = await get_detail(appid)
                     if not detail:
                         continue
 
@@ -232,7 +240,8 @@ class SteamCog(commands.Cog):
                     discount      = price_data.get("discount_percent", 0) if price_data else 0
                     last_discount = info.get("last_discount", 0)
 
-                    if discount > 0 and last_discount == 0:
+                    # DM once per (user, game) per cycle, even across multiple guilds
+                    if discount > 0 and last_discount == 0 and (uid, appid) not in notified:
                         final     = price_data.get("final_formatted", "?")
                         initial   = price_data.get("initial_formatted", "?")
                         store_url = f"https://store.steampowered.com/app/{appid}/"
@@ -247,7 +256,8 @@ class SteamCog(commands.Cog):
                         try:
                             user = await self.bot.fetch_user(int(uid))
                             await user.send(embed=embed)
-                            log.info(f"Sale alert sent to {uid} for {info['name']} (guild {guild_id})")
+                            notified.add((uid, appid))
+                            log.info(f"Sale alert sent to {uid} for {info['name']}")
                         except Exception as e:
                             log.warning(f"Could not DM user {uid}: {e}")
 

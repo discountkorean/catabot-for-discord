@@ -1081,52 +1081,54 @@ class RestockCog(commands.Cog):
         if not user and not role:
             await interaction.followup.send("❌ Provide a `user` or `role`.", ephemeral=True)
             return
-        if user and role:
-            await interaction.followup.send("❌ Provide a `user` **or** a `role`, not both. Run the command twice to subscribe each.", ephemeral=True)
-            return
 
         stores = self._guild_stores(interaction.guild_id)
         if store_name and store_name not in stores:
             await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.", ephemeral=True)
             return
 
-        name_list   = [k.strip().lower() for k in names.split(",") if k.strip()] if names else []
-        size_list   = [_normalize_size(s) for s in sizes.split(",") if s.strip()] if sizes else []
-        store_list  = [store_name] if store_name else []
-        target      = user or role
-        target_type = "user" if user else "role"
+        name_list  = [k.strip().lower() for k in names.split(",") if k.strip()] if names else []
+        size_list  = [_normalize_size(s) for s in sizes.split(",") if s.strip()] if sizes else []
+        store_list = [store_name] if store_name else []
 
-        duplicate = next((s for s in gs["subscriptions"]
-                          if s["type"] == target_type
-                          and s["target_id"] == target.id
-                          and sorted(s["stores"]) == sorted(store_list)
-                          and sorted(s["names"])  == sorted(name_list)
-                          and sorted(s["sizes"])  == sorted(size_list)), None)
-        if duplicate:
-            await interaction.followup.send(
-                f"An identical subscription already exists for {target.mention} `[{duplicate['id']}]`.",
-                ephemeral=True,
-            )
-            return
+        targets = []
+        if user: targets.append(("user", user))
+        if role: targets.append(("role", role))
 
-        sub = {
-            "id":        uuid.uuid4().hex[:8],
-            "type":      target_type,
-            "target_id": target.id,
-            "stores":    store_list,
-            "names":     name_list,
-            "sizes":     size_list,
-        }
-        gs["subscriptions"].append(sub)
-        self.persist(interaction.guild_id)
+        created, skipped = [], []
+        for target_type, target in targets:
+            duplicate = next((s for s in gs["subscriptions"]
+                              if s["type"] == target_type
+                              and s["target_id"] == target.id
+                              and sorted(s["stores"]) == sorted(store_list)
+                              and sorted(s["names"])  == sorted(name_list)
+                              and sorted(s["sizes"])  == sorted(size_list)), None)
+            if duplicate:
+                skipped.append((target, duplicate["id"]))
+                continue
+            sub = {
+                "id":        uuid.uuid4().hex[:8],
+                "type":      target_type,
+                "target_id": target.id,
+                "stores":    store_list,
+                "names":     name_list,
+                "sizes":     size_list,
+            }
+            gs["subscriptions"].append(sub)
+            created.append((target, sub["id"]))
 
-        embed = discord.Embed(title="🔔 Subscription Created", color=0x57F287,
+        if created:
+            self.persist(interaction.guild_id)
+
+        embed = discord.Embed(title="🔔 Subscription Results", color=0x57F287,
                               timestamp=datetime.now(ZoneInfo("UTC")))
-        embed.add_field(name="Target", value=target.mention,                                  inline=True)
-        embed.add_field(name="ID",     value=f"`{sub['id']}`",                                inline=True)
-        embed.add_field(name="Store",  value=store_name or "All stores",                      inline=True)
-        embed.add_field(name="Names",  value=", ".join(name_list) if name_list else "Any",    inline=False)
-        embed.add_field(name="Sizes",  value=", ".join(size_list) if size_list else "Any",    inline=False)
+        embed.add_field(name="Store", value=store_name or "All stores",                   inline=True)
+        embed.add_field(name="Names", value=", ".join(name_list) if name_list else "Any", inline=True)
+        embed.add_field(name="Sizes", value=", ".join(size_list) if size_list else "Any", inline=True)
+        if created:
+            embed.add_field(name="✅ Created", value="\n".join(f"{t.mention} `[{id}]`" for t, id in created), inline=False)
+        if skipped:
+            embed.add_field(name="⏭️ Already exists", value="\n".join(f"{t.mention} `[{id}]`" for t, id in skipped), inline=False)
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed, ephemeral=True)
 

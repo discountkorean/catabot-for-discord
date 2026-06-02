@@ -556,69 +556,12 @@ async def search_suggest(base: str, query: str) -> list:
     return await asyncio.to_thread(_search_suggest_sync, base, query)
 
 
-def _fetch_products_sync(url: str) -> list:
-    """
-    Deep-fetch all products for a store:
-    1. Enumerate all collections via collections.json
-    2. Fetch products from each collection handle (deduped by product ID)
-    3. Top up with products.json to catch anything not in a collection
-    """
-    import time
-
-    base = _base_url(url)
-
-    # Step 1: get all collection handles
-    collections = _fetch_paginated_sync(f"{base}/collections.json", "collections", delay=0.5)
-    handles = [c["handle"] for c in collections if c.get("handle")]
-    log.info(f"[deep-fetch] {base}: {len(handles)} collections found")
-
-    # Step 2: fetch products from each collection, dedupe by product ID
-    seen_ids: set = set()
-    all_products: list = []
-
-    for handle in handles:
-        batch = _fetch_paginated_sync(
-            f"{base}/collections/{handle}/products.json", "products", delay=0.3
-        )
-        added = 0
-        for p in batch:
-            pid = p.get("id")
-            if pid and pid not in seen_ids:
-                seen_ids.add(pid)
-                all_products.append(p)
-                added += 1
-        if added:
-            log.info(f"[deep-fetch] /{handle}: +{added} new products ({len(all_products)} total)")
-        time.sleep(0.1)
-
-    # Step 3: top up with products.json
-    top_up = _fetch_paginated_sync(f"{base}/products.json", "products", delay=0.5)
-    added = 0
-    for p in top_up:
-        pid = p.get("id")
-        if pid and pid not in seen_ids:
-            seen_ids.add(pid)
-            all_products.append(p)
-            added += 1
-    if added:
-        log.info(f"[deep-fetch] products.json top-up: +{added} ({len(all_products)} total)")
-
-    log.info(f"[deep-fetch] {base}: complete — {len(all_products)} unique products")
-    return all_products
-
-
 async def fetch_products(url: str) -> list:
-    return await asyncio.to_thread(_fetch_products_sync, url)
-
-
-def _fetch_products_fast_sync(url: str) -> list:
-    """Fetch all products via products.json pagination only — no collection traversal."""
+    """Fetch all products for a store via cursor-paginated products.json."""
     base = _base_url(url)
-    return _fetch_paginated_sync(f"{base}/products.json", "products", delay=0.3)
-
-
-async def fetch_products_fast(url: str) -> list:
-    return await asyncio.to_thread(_fetch_products_fast_sync, url)
+    return await asyncio.to_thread(
+        _fetch_paginated_sync, f"{base}/products.json", "products", 0.5
+    )
 
 
 def _probe_shopify_sync(url: str) -> bool:

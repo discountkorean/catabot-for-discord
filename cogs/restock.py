@@ -1538,15 +1538,11 @@ class RestockCog(commands.Cog):
             await interaction.followup.send(f"❌ Could not fetch products from **{store_name}**.", ephemeral=True)
             return
 
-        # Sort: in-stock first, partial second, out-of-stock last
-        def _stock_order(p):
-            variants = p.get("variants", [])
-            n = sum(1 for v in variants if v.get("available"))
-            if n == len(variants): return 0
-            if n == 0:             return 2
-            return 1
+        # Sort: newest first by created_at, fall back to stock status
+        def _sort_key(p):
+            return p.get("created_at", "")
 
-        products = sorted(products, key=_stock_order)
+        products = sorted(products, key=_sort_key, reverse=True)
         pages    = [products[i:i + CATALOG_PAGE_SIZE] for i in range(0, len(products), CATALOG_PAGE_SIZE)]
         view     = CatalogPaginator(store_name, stores[store_name], pages)
         await interaction.followup.send(embed=view.build_embed(), view=view)

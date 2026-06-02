@@ -42,8 +42,8 @@ IS_DEV   = os.environ.get("BOT_ENV", "").lower() == "dev"
 _GIT_FLAGS = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
 
 
-def _git(args: list, **kwargs):
-    return subprocess.run(args, creationflags=_GIT_FLAGS, capture_output=True, text=True, **kwargs)
+def _git(args: list, timeout: int = 30, **kwargs):
+    return subprocess.run(args, creationflags=_GIT_FLAGS, capture_output=True, text=True, timeout=timeout, **kwargs)
 
 
 def _git_pull_data():
@@ -51,29 +51,40 @@ def _git_pull_data():
     if not os.path.isdir(os.path.join(DATA_DIR, ".git")):
         log.warning("data/ is not a git repo — skipping pull")
         return
-    result = _git(["git", "pull", "--ff-only"], cwd=DATA_DIR)
-    if result.returncode == 0:
-        log.info(f"Data pull: {result.stdout.strip() or 'already up to date'}")
-    else:
-        log.warning(f"Data pull failed: {result.stderr.strip()}")
+    # Remove stale lock file left by a hard-killed process
+    lock = os.path.join(DATA_DIR, ".git", "index.lock")
+    if os.path.exists(lock):
+        os.remove(lock)
+        log.warning("Removed stale git index.lock before pull")
+    try:
+        result = _git(["git", "pull", "--ff-only"], cwd=DATA_DIR)
+        if result.returncode == 0:
+            log.info(f"Data pull: {result.stdout.strip() or 'already up to date'}")
+        else:
+            log.warning(f"Data pull failed: {result.stderr.strip()}")
+    except subprocess.TimeoutExpired:
+        log.warning("Data pull timed out — continuing with local data")
 
 
 def _git_push_data():
     """Commit and push any changed data files. Runs in a thread."""
     if not os.path.isdir(os.path.join(DATA_DIR, ".git")):
         return
-    _git(["git", "add", "."], cwd=DATA_DIR)
-    result = _git(
-        ["git", "commit", "-m", f"auto-sync {datetime.now(ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S')} UTC"],
-        cwd=DATA_DIR,
-    )
-    if "nothing to commit" in result.stdout:
-        return
-    push = _git(["git", "push"], cwd=DATA_DIR)
-    if push.returncode == 0:
-        log.info("Data synced to remote.")
-    else:
-        log.warning(f"Data push failed: {push.stderr.strip()}")
+    try:
+        _git(["git", "add", "."], cwd=DATA_DIR)
+        result = _git(
+            ["git", "commit", "-m", f"auto-sync {datetime.now(ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S')} UTC"],
+            cwd=DATA_DIR,
+        )
+        if "nothing to commit" in result.stdout:
+            return
+        push = _git(["git", "push"], cwd=DATA_DIR)
+        if push.returncode == 0:
+            log.info("Data synced to remote.")
+        else:
+            log.warning(f"Data push failed: {push.stderr.strip()}")
+    except subprocess.TimeoutExpired:
+        log.warning("Data push timed out")
 
 
 class StockBot(commands.Bot):
@@ -91,8 +102,12 @@ class StockBot(commands.Bot):
             await asyncio.to_thread(_git_pull_data)
         self.tree.add_command(help_group)
         await self.load_extension("cogs.restock")
-        await self.tree.sync()
-        log.info("Slash commands synced")
+        # Skip tree.sync() on restart — commands haven't changed
+        if "--restarted" not in sys.argv:
+            await self.tree.sync()
+            log.info("Slash commands synced")
+        else:
+            log.info("Restart — skipping tree.sync()")
 
     async def on_ready(self):
         log.info(f"Logged in as {self.user} (ID: {self.user.id}){' [DEV MODE]' if IS_DEV else ''}")
@@ -247,8 +262,13 @@ async def cmd_restart(interaction: discord.Interaction):
     save_bot_state(state)
 
     async def _do_restart():
-        await asyncio.sleep(1)
-        subprocess.Popen([sys.executable] + sys.argv, cwd=BASE_DIR, creationflags=_GIT_FLAGS)
+        # Stop the sync task and flush data before exiting so no lock file is left
+        if bot.sync_data_task.is_running():
+            bot.sync_data_task.cancel()
+        if not IS_DEV:
+            await asyncio.to_thread(_git_push_data)
+        args = [sys.executable] + [a for a in sys.argv if a != "--restarted"] + ["--restarted"]
+        subprocess.Popen(args, cwd=BASE_DIR)
         os._exit(0)
 
     asyncio.create_task(_do_restart())

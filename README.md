@@ -136,7 +136,7 @@ Omit the channel argument to revert a store to the server default.
 |---|---|---|
 | 🔔 Back in Stock | ✅ Yes | |
 | 🆕 New Item | ✅ Yes | |
-| 📦 Mass Drop | ✅ Yes (once) | Triggered when >5 items drop in one cycle |
+| 📦 Mass Drop | ✅ Yes (once) | Triggered when >20 items drop in one cycle — shows a summary instead of listing all products |
 | 🔴 Sold Out | ❌ No | |
 | 🗑️ Item Removed | ❌ No | |
 

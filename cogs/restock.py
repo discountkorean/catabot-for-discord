@@ -868,7 +868,7 @@ def _product_url(store_url: str, handle: str) -> str:
     return f"{scheme}://{domain}{path}/products/{handle}"
 
 
-AGGREGATE_THRESHOLD = 5
+AGGREGATE_THRESHOLD = 20
 
 
 def _size_list(variants: list, available_only: bool = False) -> str:

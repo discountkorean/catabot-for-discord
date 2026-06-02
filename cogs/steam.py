@@ -95,9 +95,9 @@ def build_game_embed(detail: dict, page: int, total: int) -> discord.Embed:
     # Platforms
     platforms  = detail.get("platforms", {})
     plat_icons = " ".join(filter(None, [
-        "🪟" if platforms.get("windows") else "",
-        "🍎" if platforms.get("mac")     else "",
-        "🐧" if platforms.get("linux")   else "",
+        "Windows" if platforms.get("windows") else "",
+        "Mac"     if platforms.get("mac")     else "",
+        "Linux"   if platforms.get("linux")   else "",
     ]))
 
     embed = discord.Embed(

@@ -92,6 +92,171 @@ class SearchPaginator(discord.ui.View):
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
 
+class WatchSizePicker(discord.ui.View):
+    """Size-picker UI for watching a product. Shows all variants as toggle buttons."""
+
+    def __init__(self, cog, guild_id: int, store_name: str, store_url: str, product: dict):
+        super().__init__(timeout=120)
+        self.cog        = cog
+        self.guild_id   = guild_id
+        self.store_name = store_name
+        self.store_url  = store_url
+
+        self.product_title = product.get("title", "Unknown")
+        self.handle        = product.get("handle", "")
+        base               = _base_url(store_url)
+        self.product_url   = f"{base}/products/{self.handle}"
+        self.image_url     = (product.get("images") or [{}])[0].get("src")
+
+        self.variants: list[dict] = product.get("variants", [])
+        self.selected: set[str]   = set()
+
+        # Add one button per variant (up to 20 to leave room for Confirm/Cancel row)
+        for v in self.variants[:20]:
+            vid       = str(v["id"])
+            avail     = v.get("available", False)
+            label     = f"{v.get('title', vid)} {'✅' if avail else '🔴'}"
+            btn       = discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"watch_size_{vid}",
+            )
+            btn.callback = self._make_toggle(vid)
+            self.add_item(btn)
+
+        self.confirm_btn = discord.ui.Button(
+            label="Confirm", style=discord.ButtonStyle.success, disabled=True, row=4
+        )
+        self.confirm_btn.callback = self._confirm
+        self.add_item(self.confirm_btn)
+
+        cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.danger, row=4)
+        cancel_btn.callback = self._cancel
+        self.add_item(cancel_btn)
+
+    def _make_toggle(self, vid: str):
+        async def toggle(interaction: discord.Interaction):
+            if vid in self.selected:
+                self.selected.discard(vid)
+            else:
+                self.selected.add(vid)
+            # Update button styles
+            for item in self.children:
+                if isinstance(item, discord.ui.Button) and item.custom_id == f"watch_size_{vid}":
+                    item.style = discord.ButtonStyle.primary if vid in self.selected else discord.ButtonStyle.secondary
+            self.confirm_btn.disabled = len(self.selected) == 0
+            await interaction.response.edit_message(view=self)
+        return toggle
+
+    async def _confirm(self, interaction: discord.Interaction):
+        selected_variants = [v for v in self.variants if str(v["id"]) in self.selected]
+        variant_ids    = [str(v["id"]) for v in selected_variants]
+        variant_titles = [v.get("title", str(v["id"])) for v in selected_variants]
+
+        # Check for duplicate watch
+        gs = self.cog._guild(self.guild_id)
+        existing = next((s for s in gs.get("subscriptions", [])
+                         if s.get("type") == "watch"
+                         and s.get("handle") == self.handle
+                         and s.get("target_id") == interaction.user.id
+                         and sorted(s.get("variant_ids", [])) == sorted(variant_ids)), None)
+        if existing:
+            await interaction.response.edit_message(
+                content=f"You already have an identical watch `[{existing['id']}]`.",
+                view=None, embed=None
+            )
+            return
+
+        sub = {
+            "type":           "watch",
+            "id":             str(uuid.uuid4())[:8],
+            "target_id":      interaction.user.id,
+            "store":          self.store_name,
+            "handle":         self.handle,
+            "variant_ids":    variant_ids,
+            "variant_titles": variant_titles,
+        }
+        gs.setdefault("subscriptions", []).append(sub)
+        self.cog.persist(self.guild_id)
+
+        # Seed state so already-available variants don't re-alert
+        state_key = self.store_url
+        if state_key in self.cog.state:
+            for v in selected_variants:
+                vid = str(v["id"])
+                if vid not in self.cog.state[state_key]:
+                    self.cog.state[state_key][vid] = {
+                        "available":     v.get("available", False),
+                        "title":         self.product_title,
+                        "variant_title": v.get("title", ""),
+                        "price":         str(v.get("price", "0.00")),
+                        "handle":        self.handle,
+                        "image_url":     self.image_url,
+                    }
+            save_state(self.cog.state)
+
+        sizes_str = ", ".join(variant_titles)
+        await interaction.response.edit_message(
+            content=f"👀 Watching **{self.product_title}** ({sizes_str}) at **{self.store_name}**. You'll get a DM when it restocks.",
+            embed=None, view=None
+        )
+
+        # DM for already-in-stock variants
+        in_stock = [v for v in selected_variants if v.get("available")]
+        if in_stock:
+            try:
+                sizes_in_stock = ", ".join(v.get("title", "") for v in in_stock)
+                await interaction.user.send(
+                    f"👀 Heads up — **{sizes_in_stock}** of **{self.product_title}** is already in stock at **{self.store_name}**:\n{self.product_url}"
+                )
+            except discord.Forbidden:
+                pass
+
+    async def _cancel(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(content="Watch cancelled.", embed=None, view=None)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+    def build_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title=self.product_title, url=self.product_url, color=0x5865F2,
+            description="Select the sizes you want to watch, then click **Confirm**.",
+        )
+        if self.image_url:
+            embed.set_thumbnail(url=self.image_url)
+        embed.add_field(name="Store", value=self.store_name, inline=True)
+        embed.set_footer(text=bot_footer())
+        return embed
+
+
+class WatchProductSelect(discord.ui.View):
+    """Product pick-list shown after /rst watch search results."""
+
+    def __init__(self, cog, guild_id: int, store_name: str, store_url: str, products: list[dict]):
+        super().__init__(timeout=120)
+        self.cog        = cog
+        self.guild_id   = guild_id
+        self.store_name = store_name
+        self.store_url  = store_url
+        self.products   = {p["handle"]: p for p in products}
+
+        options = [
+            discord.SelectOption(label=p.get("title", p["handle"])[:100], value=p["handle"])
+            for p in products[:10]
+        ]
+        select = discord.ui.Select(placeholder="Choose a product…", options=options)
+        select.callback = self._on_select
+        self.add_item(select)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        handle  = interaction.data["values"][0]
+        product = self.products[handle]
+        picker  = WatchSizePicker(self.cog, self.guild_id, self.store_name, self.store_url, product)
+        await interaction.response.edit_message(embed=picker.build_embed(), view=picker)
+
+
 CATALOG_PAGE_SIZE = 15
 
 

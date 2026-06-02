@@ -1409,7 +1409,8 @@ class RestockCog(commands.Cog):
             await interaction.followup.send("❌ Only admins can view other users' subscriptions.", ephemeral=True)
             return
 
-        subs = [s for s in gs["subscriptions"] if s["type"] == "user" and s["target_id"] == target.id]
+        subs = [s for s in gs["subscriptions"]
+                if s["type"] in ("user", "watch") and s["target_id"] == target.id]
 
         if not subs:
             await interaction.followup.send(f"No active subscriptions for {target.mention}.", ephemeral=True)
@@ -1421,11 +1422,15 @@ class RestockCog(commands.Cog):
             timestamp=datetime.now(ZoneInfo("UTC")),
         )
         for s in subs:
-            lines = [
-                f"**Store:** {', '.join(s['stores']) if s['stores'] else 'All'}",
-                f"**Names:** {', '.join(s['names']) if s['names'] else 'Any'}",
-                f"**Sizes:** {', '.join(s['sizes']) if s['sizes'] else 'Any'}",
-            ]
+            if s["type"] == "watch":
+                sizes = ", ".join(s.get("variant_titles", [])) or "All sizes"
+                lines = [f"👀 **[{s['store']}]** {s['handle']} ({sizes})"]
+            else:
+                lines = [
+                    f"**Store:** {', '.join(s['stores']) if s['stores'] else 'All'}",
+                    f"**Names:** {', '.join(s['names']) if s['names'] else 'Any'}",
+                    f"**Sizes:** {', '.join(s['sizes']) if s['sizes'] else 'Any'}",
+                ]
             embed.add_field(name=f"`{s['id']}`", value="\n".join(lines), inline=False)
         embed.set_footer(text=bot_footer())
         await interaction.followup.send(embed=embed, ephemeral=True)

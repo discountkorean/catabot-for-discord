@@ -234,20 +234,35 @@ def load_all_guilds() -> dict:
 # ── Shopify helpers ───────────────────────────────────────────────────────────
 
 def _fetch_products_sync(url: str) -> list:
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        if r.status_code in (401, 403) or "password" in r.url:
-            return []
-        r.raise_for_status()
-        data = r.json()
-        if not isinstance(data, dict):
-            return []
-        return data.get("products", [])
-    except requests.HTTPError:
-        return []
-    except Exception as e:
-        log.error(f"Failed to fetch {url}: {e}")
-        return []
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query, keep_blank_values=True)
+    qs["limit"] = ["250"]
+
+    all_products: list = []
+    page = 1
+    while True:
+        qs["page"] = [str(page)]
+        paged_url = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
+        try:
+            r = requests.get(paged_url, headers=HEADERS, timeout=15)
+            if r.status_code in (401, 403) or "password" in r.url:
+                break
+            r.raise_for_status()
+            data = r.json()
+            if not isinstance(data, dict):
+                break
+            batch = data.get("products", [])
+            all_products.extend(batch)
+            if len(batch) < 250:
+                break
+            page += 1
+        except requests.HTTPError:
+            break
+        except Exception as e:
+            log.error(f"Failed to fetch {paged_url}: {e}")
+            break
+    return all_products
 
 
 async def fetch_products(url: str) -> list:
@@ -287,17 +302,17 @@ async def discover_shopify_url(raw: str) -> str | None:
     domain = urlparse(raw).netloc or raw.split("/")[2]
 
     # Build candidate URLs in priority order
-    candidates = [f"https://{domain}/products.json?limit=1000"]
+    candidates = [f"https://{domain}/products.json?limit=250"]
 
     if domain.startswith("www."):
         bare = domain[4:]
-        candidates.append(f"https://secure.{bare}/products.json?limit=1000")
+        candidates.append(f"https://secure.{bare}/products.json?limit=250")
     elif domain.startswith("secure."):
         bare = domain[7:]
-        candidates.append(f"https://www.{bare}/products.json?limit=1000")
+        candidates.append(f"https://www.{bare}/products.json?limit=250")
     else:
-        candidates.append(f"https://www.{domain}/products.json?limit=1000")
-        candidates.append(f"https://secure.{domain}/products.json?limit=1000")
+        candidates.append(f"https://www.{domain}/products.json?limit=250")
+        candidates.append(f"https://secure.{domain}/products.json?limit=250")
 
     for url in candidates:
         if await asyncio.to_thread(_probe_shopify_sync, url):

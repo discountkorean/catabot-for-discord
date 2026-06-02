@@ -271,6 +271,14 @@ def _display_domain(domain: str) -> str:
     return domain
 
 
+def _format_sizes(variant_titles: list[str]) -> tuple[str, str]:
+    """Returns (field_name, field_value) — hides 'Default Title' for non-variant products."""
+    filtered = [t for t in variant_titles if t.lower() != "default title"]
+    if not filtered:
+        return "Variants", "N/A"
+    return "Sizes", ", ".join(filtered)
+
+
 def _product_url(store_url: str, handle: str) -> str:
     base   = store_url.split("?")[0].rstrip("/products.json").rstrip("/")
     scheme, _, domain_path = base.partition("://")
@@ -281,10 +289,10 @@ def _product_url(store_url: str, handle: str) -> str:
 
 
 def make_restock_embed(store_name: str, store_url: str, variants: list) -> discord.Embed:
-    first  = variants[0]
-    sizes  = ", ".join(v["variant_title"] for v in variants)
-    price  = f"${float(first['price']):.2f}"
-    domain = _display_domain(store_url.split("/")[2])
+    first           = variants[0]
+    size_name, sizes = _format_sizes([v["variant_title"] for v in variants])
+    price           = f"${float(first['price']):.2f}"
+    domain          = _display_domain(store_url.split("/")[2])
     embed  = discord.Embed(
         title=f"🔔 Back in Stock: {first['title']}",
         color=0x57F287,
@@ -292,7 +300,7 @@ def make_restock_embed(store_name: str, store_url: str, variants: list) -> disco
     )
     if first.get("image_url"):
         embed.set_thumbnail(url=first["image_url"])
-    embed.add_field(name="Sizes", value=sizes,            inline=True)
+    embed.add_field(name=size_name, value=sizes,          inline=True)
     embed.add_field(name="Price", value=price,             inline=True)
     embed.add_field(name="Store", value=store_name,        inline=True)
     embed.add_field(name="Stock", value="✅ In Stock",     inline=True)
@@ -305,8 +313,9 @@ def make_new_item_embed(store_name: str, store_url: str, variants: list) -> disc
     first     = variants[0]
     price     = f"${float(first['price']):.2f}"
     domain    = _display_domain(store_url.split("/")[2])
-    in_stock  = [v["variant_title"] for v in variants if v["available"]]
-    out_stock = [v["variant_title"] for v in variants if not v["available"]]
+    in_stock  = [v["variant_title"] for v in variants if v["available"] and v["variant_title"].lower() != "default title"]
+    out_stock = [v["variant_title"] for v in variants if not v["available"] and v["variant_title"].lower() != "default title"]
+    has_variants = bool(in_stock or out_stock)
     size_lines = ""
     if in_stock:
         size_lines += "✅ " + ", ".join(in_stock)
@@ -319,7 +328,7 @@ def make_new_item_embed(store_name: str, store_url: str, variants: list) -> disc
     )
     if first.get("image_url"):
         embed.set_thumbnail(url=first["image_url"])
-    embed.add_field(name="Sizes", value=size_lines or "N/A", inline=True)
+    embed.add_field(name="Sizes" if has_variants else "Variants", value=size_lines or "N/A", inline=True)
     embed.add_field(name="Price", value=price,             inline=True)
     embed.add_field(name="Store", value=store_name,        inline=True)
     embed.add_field(name="Link",  value=_product_url(store_url, first["handle"]), inline=False)
@@ -328,9 +337,9 @@ def make_new_item_embed(store_name: str, store_url: str, variants: list) -> disc
 
 
 def make_removed_embed(store_name: str, store_url: str, variants: list) -> discord.Embed:
-    first  = variants[0]
-    sizes  = ", ".join(v["variant_title"] for v in variants) or "N/A"
-    domain = _display_domain(store_url.split("/")[2])
+    first              = variants[0]
+    size_name, sizes   = _format_sizes([v["variant_title"] for v in variants])
+    domain             = _display_domain(store_url.split("/")[2])
     embed  = discord.Embed(
         title=f"🗑️ Item Removed: {first['title']}",
         color=0x95a5a6,
@@ -338,17 +347,17 @@ def make_removed_embed(store_name: str, store_url: str, variants: list) -> disco
     )
     if first.get("image_url"):
         embed.set_thumbnail(url=first["image_url"])
-    embed.add_field(name="Last Known Sizes", value=sizes,      inline=True)
+    embed.add_field(name=f"Last Known {size_name}", value=sizes, inline=True)
     embed.add_field(name="Store",            value=store_name, inline=True)
     embed.set_footer(text=f"{bot_footer()} • {domain}")
     return embed
 
 
 def make_sold_out_embed(store_name: str, store_url: str, variants: list) -> discord.Embed:
-    first  = variants[0]
-    sizes  = ", ".join(v["variant_title"] for v in variants)
-    price  = f"${float(first['price']):.2f}"
-    domain = _display_domain(store_url.split("/")[2])
+    first              = variants[0]
+    size_name, sizes   = _format_sizes([v["variant_title"] for v in variants])
+    price              = f"${float(first['price']):.2f}"
+    domain             = _display_domain(store_url.split("/")[2])
     embed  = discord.Embed(
         title=f"🔴 Sold Out: {first['title']}",
         color=0xED4245,
@@ -356,7 +365,7 @@ def make_sold_out_embed(store_name: str, store_url: str, variants: list) -> disc
     )
     if first.get("image_url"):
         embed.set_thumbnail(url=first["image_url"])
-    embed.add_field(name="Sizes", value=sizes or "N/A",    inline=True)
+    embed.add_field(name=size_name, value=sizes,           inline=True)
     embed.add_field(name="Price", value=price,              inline=True)
     embed.add_field(name="Store", value=store_name,         inline=True)
     embed.add_field(name="Link",  value=_product_url(store_url, first["handle"]), inline=False)

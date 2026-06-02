@@ -49,10 +49,12 @@ class SearchResult:
 # ── Search paginator ──────────────────────────────────────────────────────────
 
 class SearchPaginator(discord.ui.View):
-    def __init__(self, results: list[SearchResult]):
+    def __init__(self, results: list[SearchResult], cog=None, guild_id: int = None):
         super().__init__(timeout=120)
-        self.results = results
-        self.page    = 0
+        self.results  = results
+        self.cog      = cog
+        self.guild_id = guild_id
+        self.page     = 0
         self._update_buttons()
 
     def _update_buttons(self):
@@ -90,6 +92,23 @@ class SearchPaginator(discord.ui.View):
         self.page += 1
         self._update_buttons()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(label="👀 Watch", style=discord.ButtonStyle.primary)
+    async def watch_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.cog or not self.guild_id:
+            await interaction.response.send_message("Watch unavailable here.", ephemeral=True)
+            return
+        r         = self.results[self.page]
+        stores    = self.cog._guild_stores(self.guild_id)
+        store_url = stores.get(r.store_name, "")
+        base      = _base_url(store_url)
+        product   = await asyncio.to_thread(
+            lambda: _normalize_product_js(
+                requests.get(f"{base}/products/{r.handle}.js", headers=HEADERS, timeout=10).json()
+            )
+        )
+        picker = WatchSizePicker(self.cog, self.guild_id, r.store_name, store_url, product)
+        await interaction.response.send_message(embed=picker.build_embed(), view=picker, ephemeral=True)
 
 
 class WatchSizePicker(discord.ui.View):
@@ -1931,7 +1950,7 @@ class RestockCog(commands.Cog):
             return
 
         results   = results[:MAX_SEARCH_RESULTS]
-        paginator = SearchPaginator(results)
+        paginator = SearchPaginator(results, cog=self, guild_id=interaction.guild_id)
         await interaction.followup.send(embed=paginator.build_embed(), view=paginator)
 
     @tracker.command(name="watch", description="Watch a product for restocks — get a DM when your size drops")

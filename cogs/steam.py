@@ -16,24 +16,44 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-MAX_RESULTS      = 5
-BASE_DIR         = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WISHLIST_FILE    = os.path.join(BASE_DIR, "data", "steam_wishlists.json")
+MAX_RESULTS = 5
+BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR    = os.path.join(BASE_DIR, "data")
 
 
-# ── Wishlist persistence ──────────────────────────────────────────────────────
+# ── Wishlist persistence (per-guild) ──────────────────────────────────────────
 
-def load_wishlists() -> dict:
-    if os.path.exists(WISHLIST_FILE):
-        with open(WISHLIST_FILE) as f:
+def _wishlist_file(guild_id: int | str) -> str:
+    return os.path.join(DATA_DIR, str(guild_id), "steam_wishlist.json")
+
+
+def load_wishlist(guild_id: int | str) -> dict:
+    path = _wishlist_file(guild_id)
+    if os.path.exists(path):
+        with open(path) as f:
             return json.load(f)
     return {}
 
 
-def save_wishlists(data: dict):
-    os.makedirs(os.path.dirname(WISHLIST_FILE), exist_ok=True)
-    with open(WISHLIST_FILE, "w") as f:
+def save_wishlist(guild_id: int | str, data: dict):
+    path = _wishlist_file(guild_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
         json.dump(data, f, indent=2)
+
+
+def all_guild_wishlists() -> list[tuple[str, dict]]:
+    """Returns [(guild_id, wishlist_data)] for all guilds that have a wishlist."""
+    result = []
+    if not os.path.isdir(DATA_DIR):
+        return result
+    for entry in os.scandir(DATA_DIR):
+        if entry.is_dir() and entry.name.isdigit():
+            path = _wishlist_file(entry.name)
+            if os.path.exists(path):
+                with open(path) as f:
+                    result.append((entry.name, json.load(f)))
+    return result
 
 
 # ── API helpers ───────────────────────────────────────────────────────────────
@@ -167,8 +187,8 @@ class SteamPaginator(discord.ui.View):
         price_data = detail.get("price_overview", {})
         discount   = price_data.get("discount_percent", 0) if price_data else 0
 
-        wishlists = load_wishlists()
-        user_list = wishlists.setdefault(uid, {})
+        wishlist  = load_wishlist(interaction.guild_id)
+        user_list = wishlist.setdefault(uid, {})
 
         if appid in user_list:
             await interaction.response.send_message(
@@ -181,7 +201,7 @@ class SteamPaginator(discord.ui.View):
             "last_discount": discount,
             "added_at":      datetime.now(ZoneInfo("UTC")).isoformat(),
         }
-        save_wishlists(wishlists)
+        save_wishlist(interaction.guild_id, wishlist)
         await interaction.response.send_message(
             f"Added **{name}** to your wishlist. You'll be DM'd when it goes on sale.", ephemeral=True
         )
@@ -200,50 +220,43 @@ class SteamCog(commands.Cog):
 
     @tasks.loop(minutes=30)
     async def check_sales(self):
-        wishlists = load_wishlists()
-        if not wishlists:
-            return
+        for guild_id, wishlist in all_guild_wishlists():
+            changed = False
+            for uid, games in wishlist.items():
+                for appid, info in list(games.items()):
+                    detail = await fetch_appdetails(int(appid))
+                    if not detail:
+                        continue
 
-        changed = False
-        for uid, games in wishlists.items():
-            for appid, info in list(games.items()):
-                detail = await fetch_appdetails(int(appid))
-                if not detail:
-                    continue
+                    price_data    = detail.get("price_overview", {})
+                    discount      = price_data.get("discount_percent", 0) if price_data else 0
+                    last_discount = info.get("last_discount", 0)
 
-                price_data   = detail.get("price_overview", {})
-                discount     = price_data.get("discount_percent", 0) if price_data else 0
-                last_discount = info.get("last_discount", 0)
+                    if discount > 0 and last_discount == 0:
+                        final     = price_data.get("final_formatted", "?")
+                        initial   = price_data.get("initial_formatted", "?")
+                        store_url = f"https://store.steampowered.com/app/{appid}/"
+                        embed = discord.Embed(
+                            title=f"🏷️ {info['name']} is on sale!",
+                            url=store_url, color=0x57F287,
+                            timestamp=datetime.now(ZoneInfo("UTC")),
+                        )
+                        embed.add_field(name="Sale",       value=f"~~{initial}~~ **{final}** (-{discount}%)", inline=False)
+                        embed.add_field(name="Store Page", value=f"[View on Steam]({store_url})", inline=False)
+                        embed.set_footer(text="Steam Wishlist Alert  •  cata.ai")
+                        try:
+                            user = await self.bot.fetch_user(int(uid))
+                            await user.send(embed=embed)
+                            log.info(f"Sale alert sent to {uid} for {info['name']} (guild {guild_id})")
+                        except Exception as e:
+                            log.warning(f"Could not DM user {uid}: {e}")
 
-                # Alert if newly on sale
-                if discount > 0 and last_discount == 0:
-                    final     = price_data.get("final_formatted", "?")
-                    initial   = price_data.get("initial_formatted", "?")
-                    store_url = f"https://store.steampowered.com/app/{appid}/"
-                    embed = discord.Embed(
-                        title=f"🏷️ {info['name']} is on sale!",
-                        url=store_url,
-                        color=0x57F287,
-                        timestamp=datetime.now(ZoneInfo("UTC")),
-                    )
-                    embed.add_field(name="Sale",       value=f"~~{initial}~~ **{final}** (-{discount}%)", inline=False)
-                    embed.add_field(name="Store Page", value=f"[View on Steam]({store_url})", inline=False)
-                    embed.set_footer(text="Steam Wishlist Alert  •  cata.ai")
+                    if discount != last_discount:
+                        info["last_discount"] = discount
+                        changed = True
 
-                    try:
-                        user = await self.bot.fetch_user(int(uid))
-                        await user.send(embed=embed)
-                        log.info(f"Sale alert sent to {uid} for {info['name']}")
-                    except Exception as e:
-                        log.warning(f"Could not DM user {uid}: {e}")
-
-                # Update stored discount
-                if discount != last_discount:
-                    info["last_discount"] = discount
-                    changed = True
-
-        if changed:
-            save_wishlists(wishlists)
+            if changed:
+                save_wishlist(guild_id, wishlist)
 
     @check_sales.before_loop
     async def before_check_sales(self):
@@ -257,13 +270,14 @@ class SteamCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
-        """Purge all Steam data for a user when they leave any server."""
-        uid       = str(member.id)
-        wishlists = load_wishlists()
-        if uid in wishlists:
-            del wishlists[uid]
-            save_wishlists(wishlists)
-            log.info(f"Purged Steam wishlist for departed user {uid}")
+        """Purge user's wishlist entries for the guild they left."""
+        uid      = str(member.id)
+        guild_id = member.guild.id
+        wishlist = load_wishlist(guild_id)
+        if uid in wishlist:
+            del wishlist[uid]
+            save_wishlist(guild_id, wishlist)
+            log.info(f"Purged Steam wishlist for user {uid} from guild {guild_id}")
 
     # ── Commands ──────────────────────────────────────────────────────────────
 
@@ -291,9 +305,9 @@ class SteamCog(commands.Cog):
     @steam.command(name="wishlist", description="View your Steam wishlist and sale alerts")
     async def steam_wishlist(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        uid       = str(interaction.user.id)
-        wishlists = load_wishlists()
-        games     = wishlists.get(uid, {})
+        uid      = str(interaction.user.id)
+        wishlist = load_wishlist(interaction.guild_id)
+        games    = wishlist.get(uid, {})
 
         if not games:
             await interaction.followup.send("Your Steam wishlist is empty. Use the **Wishlist** button on `/steam search` to add games.", ephemeral=True)
@@ -317,15 +331,15 @@ class SteamCog(commands.Cog):
             )
 
         embed.set_footer(text=f"Steam Wishlist  •  {len(games)} game(s)  •  cata.ai")
-        await interaction.followup.send(embed=embed, ephemeral=True, view=WishlistManageView(uid))
+        await interaction.followup.send(embed=embed, ephemeral=True, view=WishlistManageView(uid, interaction.guild_id))
 
     @steam.command(name="unwishlist", description="Remove a game from your Steam wishlist")
     @app_commands.describe(name="Name of the game to remove")
     async def steam_unwishlist(self, interaction: discord.Interaction, name: str):
         await interaction.response.defer(ephemeral=True)
-        uid       = str(interaction.user.id)
-        wishlists = load_wishlists()
-        games     = wishlists.get(uid, {})
+        uid      = str(interaction.user.id)
+        wishlist = load_wishlist(interaction.guild_id)
+        games    = wishlist.get(uid, {})
 
         match = next((aid for aid, info in games.items() if info["name"].lower() == name.lower()), None)
         if not match:
@@ -334,31 +348,33 @@ class SteamCog(commands.Cog):
 
         removed_name = games[match]["name"]
         del games[match]
-        save_wishlists(wishlists)
+        save_wishlist(interaction.guild_id, wishlist)
         await interaction.followup.send(f"Removed **{removed_name}** from your wishlist.", ephemeral=True)
 
 
 # ── Wishlist manage view (remove buttons) ─────────────────────────────────────
 
 class WishlistManageView(discord.ui.View):
-    def __init__(self, uid: str):
+    def __init__(self, uid: str, guild_id: int):
         super().__init__(timeout=120)
-        self.uid = uid
-        wishlists = load_wishlists()
-        games     = wishlists.get(uid, {})
-        for appid, info in list(games.items())[:5]:  # max 5 buttons
-            self.add_item(WishlistRemoveButton(appid, info["name"]))
+        self.uid      = uid
+        self.guild_id = guild_id
+        wishlist = load_wishlist(guild_id)
+        games    = wishlist.get(uid, {})
+        for appid, info in list(games.items())[:5]:
+            self.add_item(WishlistRemoveButton(appid, info["name"], guild_id))
 
 
 class WishlistRemoveButton(discord.ui.Button):
-    def __init__(self, appid: str, name: str):
+    def __init__(self, appid: str, name: str, guild_id: int):
         super().__init__(label=f"Remove {name[:40]}", style=discord.ButtonStyle.danger)
-        self.appid = appid
+        self.appid    = appid
+        self.guild_id = guild_id
 
     async def callback(self, interaction: discord.Interaction):
-        uid       = str(interaction.user.id)
-        wishlists = load_wishlists()
-        games     = wishlists.get(uid, {})
+        uid      = str(interaction.user.id)
+        wishlist = load_wishlist(self.guild_id)
+        games    = wishlist.get(uid, {})
 
         if self.appid not in games:
             await interaction.response.send_message("Already removed.", ephemeral=True)
@@ -366,7 +382,7 @@ class WishlistRemoveButton(discord.ui.Button):
 
         name = games[self.appid]["name"]
         del games[self.appid]
-        save_wishlists(wishlists)
+        save_wishlist(self.guild_id, wishlist)
         self.disabled = True
         self.label    = f"Removed {name[:40]}"
         await interaction.response.edit_message(view=self.view)

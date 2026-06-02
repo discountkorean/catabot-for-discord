@@ -1052,7 +1052,6 @@ class RestockCog(commands.Cog):
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
-    @commands.Cog.listener()
     def _purge_user(self, uid: int, guild_id: str):
         """Remove all references to a user from a guild's data."""
         gs = self.guilds.get(guild_id)
@@ -1077,6 +1076,7 @@ class RestockCog(commands.Cog):
         """Purge all user data from the guild they left."""
         self._purge_user(member.id, str(member.guild.id))
 
+    @commands.Cog.listener()
     async def on_ready(self):
         # Purge stale name-keyed entries from stock_state (legacy format pre URL-keying)
         stale_keys = [k for k in self.state if not k.startswith("http")]

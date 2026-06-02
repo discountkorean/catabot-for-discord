@@ -1,7 +1,7 @@
 import asyncio
 import discord
 from discord import app_commands
-from discord.ext import commands, tasks
+from discord.ext import commands
 import logging
 import logging.handlers
 import os
@@ -38,53 +38,6 @@ log = logging.getLogger(__name__)
 DATA_DIR = os.path.join(BASE_DIR, "data")
 IS_DEV   = os.environ.get("BOT_ENV", "").lower() == "dev"
 
-# Suppress console windows when spawning git subprocesses on Windows
-_GIT_FLAGS = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-
-
-def _git(args: list, timeout: int = 30, **kwargs):
-    return subprocess.run(args, creationflags=_GIT_FLAGS, capture_output=True, text=True, timeout=timeout, **kwargs)
-
-
-def _git_pull_data():
-    """Pull latest data from private repo. Runs synchronously at startup."""
-    if not os.path.isdir(os.path.join(DATA_DIR, ".git")):
-        log.warning("data/ is not a git repo — skipping pull")
-        return
-    # Remove stale lock file left by a hard-killed process
-    lock = os.path.join(DATA_DIR, ".git", "index.lock")
-    if os.path.exists(lock):
-        os.remove(lock)
-        log.warning("Removed stale git index.lock before pull")
-    try:
-        result = _git(["git", "pull", "--ff-only"], cwd=DATA_DIR)
-        if result.returncode == 0:
-            log.info(f"Data pull: {result.stdout.strip() or 'already up to date'}")
-        else:
-            log.warning(f"Data pull failed: {result.stderr.strip()}")
-    except subprocess.TimeoutExpired:
-        log.warning("Data pull timed out — continuing with local data")
-
-
-def _git_push_data():
-    """Commit and push any changed data files. Runs in a thread."""
-    if not os.path.isdir(os.path.join(DATA_DIR, ".git")):
-        return
-    try:
-        _git(["git", "add", "."], cwd=DATA_DIR)
-        result = _git(
-            ["git", "commit", "-m", f"auto-sync {datetime.now(ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S')} UTC"],
-            cwd=DATA_DIR,
-        )
-        if "nothing to commit" in result.stdout:
-            return
-        push = _git(["git", "push"], cwd=DATA_DIR)
-        if push.returncode == 0:
-            log.info("Data synced to remote.")
-        else:
-            log.warning(f"Data push failed: {push.stderr.strip()}")
-    except subprocess.TimeoutExpired:
-        log.warning("Data push timed out")
 
 
 class StockBot(commands.Bot):
@@ -96,10 +49,6 @@ class StockBot(commands.Bot):
     async def setup_hook(self):
         with open(PID_FILE, "w") as f:
             f.write(str(os.getpid()))
-        if IS_DEV:
-            log.info("DEV mode — skipping data pull")
-        else:
-            await asyncio.to_thread(_git_pull_data)
         await self.load_extension("cogs.restock")
         # Skip tree.sync() on restart — commands haven't changed
         if "--restarted" not in sys.argv:
@@ -114,12 +63,6 @@ class StockBot(commands.Bot):
 
     async def on_ready(self):
         log.info(f"Logged in as {self.user} (ID: {self.user.id}){' [DEV MODE]' if IS_DEV else ''}")
-        if not IS_DEV and not self.sync_data_task.is_running():
-            self.sync_data_task.start()
-
-    @tasks.loop(minutes=5)
-    async def sync_data_task(self):
-        await asyncio.to_thread(_git_push_data)
 
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         msg = "❌ An unexpected error occurred. Please try again."
@@ -258,11 +201,6 @@ async def cmd_restart(interaction: discord.Interaction):
     save_bot_state(state)
 
     async def _do_restart():
-        # Stop the sync task and flush data before exiting so no lock file is left
-        if bot.sync_data_task.is_running():
-            bot.sync_data_task.cancel()
-        if not IS_DEV:
-            await asyncio.to_thread(_git_push_data)
         args = [sys.executable] + [a for a in sys.argv if a != "--restarted"] + ["--restarted"]
         subprocess.Popen(args, cwd=BASE_DIR)
         os._exit(0)

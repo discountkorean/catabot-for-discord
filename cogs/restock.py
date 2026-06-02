@@ -6,6 +6,7 @@ import json
 import requests
 import asyncio
 import logging
+import re
 import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -432,21 +433,22 @@ def _base_url(url: str) -> str:
 
 
 def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> list:
-    """Fetch all pages of a Shopify endpoint using ?page=N pagination."""
+    """Fetch all pages of a Shopify endpoint using cursor-based Link header pagination."""
     import time
     from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
     parsed = urlparse(url)
     qs = parse_qs(parsed.query, keep_blank_values=True)
     qs["limit"] = ["250"]
+    qs.pop("page", None)
+    qs.pop("page_info", None)
 
+    next_url: str | None = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
     results = []
-    page = 1
-    while True:
-        qs["page"] = [str(page)]
-        paged_url = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
+
+    while next_url:
         try:
-            r = requests.get(paged_url, headers=HEADERS, timeout=15)
+            r = requests.get(next_url, headers=HEADERS, timeout=15)
             if r.status_code == 429:
                 time.sleep(5)
                 continue
@@ -458,14 +460,23 @@ def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> list:
                 break
             batch = data.get(key, [])
             results.extend(batch)
-            if len(batch) < 250:
-                break
-            page += 1
-            time.sleep(delay)
+
+            # Follow Shopify's cursor-based next-page link
+            next_url = None
+            link_header = r.headers.get("Link", "")
+            for part in link_header.split(","):
+                if 'rel="next"' in part:
+                    m = re.search(r"<([^>]+)>", part)
+                    if m:
+                        next_url = m.group(1)
+                    break
+
+            if next_url:
+                time.sleep(delay)
         except requests.HTTPError:
             break
         except Exception as e:
-            log.error(f"Failed to fetch {paged_url}: {e}")
+            log.error(f"Failed to fetch {next_url}: {e}")
             break
     return results
 
@@ -566,13 +577,9 @@ def _fetch_products_sync(url: str) -> list:
     all_products: list = []
 
     for handle in handles:
-        col_url = f"{base}/collections/{handle}/products.json?limit=250"
-        try:
-            r = requests.get(col_url, headers=HEADERS, timeout=15)
-            batch = r.json().get("products", []) if r.ok else []
-        except Exception as e:
-            log.error(f"[deep-fetch] collection {handle} fetch failed: {e}")
-            batch = []
+        batch = _fetch_paginated_sync(
+            f"{base}/collections/{handle}/products.json", "products", delay=0.3
+        )
         added = 0
         for p in batch:
             pid = p.get("id")

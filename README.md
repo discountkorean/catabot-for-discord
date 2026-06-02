@@ -50,6 +50,14 @@ python bot.py     # Direct
 
 ## Commands
 
+### Help
+
+| Command | Description |
+|---|---|
+| `/help` | All commands — admin pages hidden from non-admins |
+| `/rst help` | Detailed `/rst` command reference |
+| `/rst-admin help` | Detailed `/rst-admin` command reference (admin only) |
+
 ### Public (`/rst`)
 
 | Command | Description |
@@ -108,6 +116,7 @@ Omit the channel argument to revert a store to the server default.
 
 | Command | Description |
 |---|---|
+| `/help` | Show command reference |
 | `/restart` | Restart the bot process (admin only) |
 
 ## Alert Types

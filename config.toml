@@ -4,7 +4,7 @@
 # Use /stop then /start in Discord after making changes.
 
 [bot]
-version = "3.1.0"
+version = "3.2.0"
 
 [discord]
 # token loaded from .env → DISCORD_TOKEN
@@ -12,4 +12,4 @@ version = "3.1.0"
 [monitor]
 poll_interval = 60  # seconds between each check (default 60s)
 
-# Stores are managed per-server via /rst admin add and /rst admin remove.
+# Stores are managed per-server via /rst-admin add and /rst-admin remove.

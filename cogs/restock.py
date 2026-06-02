@@ -278,6 +278,17 @@ def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> list:
     return results
 
 
+def _normalize_product_js(p: dict) -> dict:
+    """Normalize /products/{handle}.js response to products.json shape."""
+    for v in p.get("variants", []):
+        if isinstance(v.get("price"), int):
+            v["price"] = f"{v['price'] / 100:.2f}"
+    raw_images = p.get("images", [])
+    if raw_images and isinstance(raw_images[0], str):
+        p["images"] = [{"src": ("https:" + img if img.startswith("//") else img)} for img in raw_images]
+    return p
+
+
 def _search_suggest_sync(base: str, query: str, limit: int = 10) -> list:
     """
     Query /search/suggest.json for product handles, then fetch each product's
@@ -287,7 +298,13 @@ def _search_suggest_sync(base: str, query: str, limit: int = 10) -> list:
     try:
         r = requests.get(
             f"{base}/search/suggest.json",
-            params={"q": query, "resources[type]": "product", "resources[limit]": limit},
+            params={
+                "q": query,
+                "resources[type]": "product",
+                "resources[limit]": limit,
+                "resources[options][unavailable_products]": "show",
+                "resources[options][fields]": "title,variants.title,vendor",
+            },
             headers=HEADERS,
             timeout=10,
         )
@@ -309,16 +326,7 @@ def _search_suggest_sync(base: str, query: str, limit: int = 10) -> list:
             if not rp.ok:
                 continue
             p = rp.json()
-            # Normalize .js format to match products.json shape expected by SearchResult:
-            # - variant prices are in cents → convert to decimal string
-            # - images is a list of URL strings → wrap as [{"src": url}]
-            for v in p.get("variants", []):
-                if isinstance(v.get("price"), int):
-                    v["price"] = f"{v['price'] / 100:.2f}"
-            raw_images = p.get("images", [])
-            if raw_images and isinstance(raw_images[0], str):
-                p["images"] = [{"src": ("https:" + img if img.startswith("//") else img)} for img in raw_images]
-            products.append(p)
+            products.append(_normalize_product_js(p))
         except Exception as e:
             log.error(f"product .js fetch failed for {base}/products/{handle}: {e}")
     return products

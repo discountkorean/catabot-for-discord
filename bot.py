@@ -87,6 +87,7 @@ class StockBot(commands.Bot):
         await asyncio.to_thread(_git_pull_data)
         self.tree.add_command(help_group)
         await self.load_extension("cogs.restock")
+        await self.load_extension("cogs.steam")
         await self.tree.sync()
         log.info("Slash commands synced")
 

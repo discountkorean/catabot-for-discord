@@ -35,6 +35,7 @@ Write-Host "Close this window or run stop.bat to shut down."
 Write-Host ""
 
 $crashDelay       = 10   # seconds to wait after an unexpected crash
+$socketBackoff    = 60   # extra wait when bot dies in <30s (likely socket exhaustion)
 $lastRestartHour  = -1   # tracks which hour we last did a scheduled restart
 
 while ($true) {
@@ -45,6 +46,7 @@ while ($true) {
     }
 
     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Starting bot..." -ForegroundColor Green
+    $startTime = Get-Date
     $p = Start-Process $pythonw `
         -ArgumentList "`"$botFile`"" `
         -WorkingDirectory $dir `
@@ -88,8 +90,14 @@ while ($true) {
         Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Scheduled restart — back up in 3s..." -ForegroundColor Cyan
         Start-Sleep -Seconds 3
     } else {
-        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Bot exited (code $code) — restarting in ${crashDelay}s..." -ForegroundColor Red
-        Start-Sleep -Seconds $crashDelay
+        $uptime = ((Get-Date) - $startTime).TotalSeconds
+        if ($uptime -lt 30) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Bot died after $([int]$uptime)s (possible socket exhaustion) — waiting ${socketBackoff}s for ports to drain..." -ForegroundColor Red
+            Start-Sleep -Seconds $socketBackoff
+        } else {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Bot exited (code $code) — restarting in ${crashDelay}s..." -ForegroundColor Red
+            Start-Sleep -Seconds $crashDelay
+        }
     }
 }
 

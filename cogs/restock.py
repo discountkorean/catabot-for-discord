@@ -1053,26 +1053,29 @@ class RestockCog(commands.Cog):
     # ── Startup ───────────────────────────────────────────────────────────────
 
     @commands.Cog.listener()
-    @commands.Cog.listener()
-    async def on_member_remove(self, member: discord.Member):
-        """Remove a user's subscriptions from this guild when they leave."""
-        guild_id = str(member.guild.id)
-        gs       = self.guilds.get(guild_id)
+    def _purge_user(self, uid: int, guild_id: str):
+        """Remove all references to a user from a guild's data."""
+        gs = self.guilds.get(guild_id)
         if not gs:
             return
-        uid     = member.id
         changed = False
-        for store_name, notifs in gs.get("notifications", {}).items():
+        for notifs in gs.get("notifications", {}).values():
             if isinstance(notifs, list):
                 if uid in notifs:
                     notifs.remove(uid)
                     changed = True
-            elif uid in notifs.get("users", []):
-                notifs["users"].remove(uid)
-                changed = True
+            else:
+                if uid in notifs.get("users", []):
+                    notifs["users"].remove(uid)
+                    changed = True
         if changed:
             self.persist(guild_id)
-            log.info(f"Removed subscriptions for departed user {uid} from guild {guild_id}")
+            log.info(f"Purged all data for user {uid} from guild {guild_id}")
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """Purge all user data from the guild they left."""
+        self._purge_user(member.id, str(member.guild.id))
 
     async def on_ready(self):
         # Purge stale name-keyed entries from stock_state (legacy format pre URL-keying)

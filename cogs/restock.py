@@ -1281,9 +1281,15 @@ class RestockCog(commands.Cog):
             await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.", ephemeral=True)
             return
 
-        dest, err = self._resolve_channel(interaction.guild_id, channel)
-        if err:
-            await interaction.followup.send(err, ephemeral=True)
+        if channel:
+            dest = channel
+        else:
+            dest = await self._resolve_store_channel(gs, store_name, str(interaction.guild_id))
+        if not dest:
+            await interaction.followup.send(
+                "❌ No alert channel set for this store — run `/rst admin start` or `/rst admin channel`.",
+                ephemeral=True,
+            )
             return
 
         products = await fetch_products(stores[store_name])
@@ -1335,9 +1341,15 @@ class RestockCog(commands.Cog):
             await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.", ephemeral=True)
             return
 
-        dest, err = self._resolve_channel(interaction.guild_id, channel)
-        if err:
-            await interaction.followup.send(err, ephemeral=True)
+        if channel:
+            dest = channel
+        else:
+            dest = await self._resolve_store_channel(gs, store_name, str(interaction.guild_id))
+        if not dest:
+            await interaction.followup.send(
+                "❌ No alert channel set for this store — run `/rst admin start` or `/rst admin channel`.",
+                ephemeral=True,
+            )
             return
 
         store_url     = stores[store_name]

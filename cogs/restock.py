@@ -1934,6 +1934,33 @@ class RestockCog(commands.Cog):
         paginator = SearchPaginator(results)
         await interaction.followup.send(embed=paginator.build_embed(), view=paginator)
 
+    @tracker.command(name="watch", description="Watch a product for restocks — get a DM when your size drops")
+    @app_commands.describe(store_name="Store to search", query="Product name or keyword")
+    @app_commands.autocomplete(store_name=_store_autocomplete)
+    async def tracker_watch(self, interaction: discord.Interaction, store_name: str, query: str):
+        await interaction.response.defer(ephemeral=True)
+        stores = self._guild_stores(interaction.guild_id)
+
+        if store_name not in stores:
+            await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.", ephemeral=True)
+            return
+
+        store_url = stores[store_name]
+        base      = _base_url(store_url)
+        products  = await search_suggest(base, query)
+
+        if not products:
+            await interaction.followup.send(f"No products found matching **{query}** in **{store_name}**.", ephemeral=True)
+            return
+
+        if len(products) == 1:
+            # Skip the pick list and go straight to size picker
+            picker = WatchSizePicker(self, interaction.guild_id, store_name, store_url, products[0])
+            await interaction.followup.send(embed=picker.build_embed(), view=picker, ephemeral=True)
+        else:
+            view = WatchProductSelect(self, interaction.guild_id, store_name, store_url, products)
+            await interaction.followup.send("Select a product to watch:", view=view, ephemeral=True)
+
     @tracker.command(name="catalog", description="Browse all products at a store with stock status")
     @app_commands.describe(store_name="Store to browse")
     @app_commands.autocomplete(store_name=_store_autocomplete)

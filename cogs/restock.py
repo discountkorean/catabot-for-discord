@@ -366,10 +366,12 @@ class AlertToggleView(discord.ui.View):
         self._rebuild()
 
     def _alerts(self) -> dict:
-        gs = self.cog._guild(self.guild_id)
-        return gs.setdefault("store_alerts", {}).setdefault(
-            self.store_name, _default_store_alerts()
-        )
+        gs           = self.cog._guild(self.guild_id)
+        store_alerts = gs.setdefault("store_alerts", {})
+        if self.store_name not in store_alerts:
+            store_alerts[self.store_name] = _default_store_alerts()
+            self.cog.persist(self.guild_id)
+        return store_alerts[self.store_name]
 
     def _rebuild(self):
         self.clear_items()
@@ -386,10 +388,11 @@ class AlertToggleView(discord.ui.View):
 
     def _make_callback(self, key: str):
         async def callback(interaction: discord.Interaction):
-            gs     = self.cog._guild(self.guild_id)
-            alerts = gs.setdefault("store_alerts", {}).setdefault(
-                self.store_name, _default_store_alerts()
-            )
+            gs           = self.cog._guild(self.guild_id)
+            store_alerts = gs.setdefault("store_alerts", {})
+            if self.store_name not in store_alerts:
+                store_alerts[self.store_name] = _default_store_alerts()
+            alerts = store_alerts[self.store_name]
             alerts[key] = not alerts.get(key, True)
             self.cog.persist(self.guild_id)
             self._rebuild()

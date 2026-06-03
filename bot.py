@@ -189,7 +189,7 @@ async def cmd_help(interaction: discord.Interaction):
     await interaction.response.send_message(embed=pages[0], view=HelpPaginator(pages, 0), ephemeral=True)
 
 
-RESTART_HOURS_AEST = {6, 18}  # 6 AM and 6 PM AEST
+RESTART_HOURS_AEST = {0, 8, 16}  # 12 AM, 8 AM, 4 PM AEST
 
 @tasks.loop(minutes=1)
 async def scheduled_restart():

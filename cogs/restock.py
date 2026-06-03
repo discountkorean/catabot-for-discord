@@ -2207,6 +2207,7 @@ class RestockCog(commands.Cog):
     async def admin_recent(self, interaction: discord.Interaction,
                            store_name: str, channel: discord.TextChannel = None):
         await interaction.response.defer(ephemeral=True)
+        gs     = self._guild(interaction.guild_id)
         stores = self._guild_stores(interaction.guild_id)
 
         if store_name not in stores:

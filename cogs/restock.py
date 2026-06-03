@@ -220,7 +220,7 @@ class WatchSizePicker(discord.ui.View):
                         "handle":        self.handle,
                         "image_url":     self.image_url,
                     }
-            save_state(self.cog.state)
+            await asyncio.to_thread(save_state, self.cog.state)
 
         sizes_str = ", ".join(variant_titles)
         await interaction.response.edit_message(
@@ -484,8 +484,9 @@ def load_state() -> dict:
 
 
 def save_state(state: dict):
+    data = json.dumps(state, indent=2)
     with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+        f.write(data)
 
 
 def load_products_cache() -> dict:
@@ -500,8 +501,9 @@ def load_products_cache() -> dict:
 
 
 def save_products_cache(cache: dict):
+    data = json.dumps(cache, indent=2)
     with open(PRODUCTS_CACHE_FILE, "w") as f:
-        json.dump(cache, f, indent=2)
+        f.write(data)
 
 
 def load_bot_state() -> dict:
@@ -1472,8 +1474,10 @@ class RestockCog(commands.Cog):
                 except Exception as e:
                     log.error(f"Failed to send alert for {store_name} → guild {guild_id_str}: {e}")
 
-        save_state(self.state)
-        save_products_cache(self.products_cache)
+        await asyncio.gather(
+            asyncio.to_thread(save_state, self.state),
+            asyncio.to_thread(save_products_cache, self.products_cache),
+        )
 
         # Stamp last polled time for all due guilds
         for gid in due_guilds:

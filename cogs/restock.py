@@ -396,7 +396,10 @@ class AlertToggleView(discord.ui.View):
             alerts[key] = not alerts.get(key, True)
             self.cog.persist(self.guild_id)
             self._rebuild()
-            await interaction.response.edit_message(view=self)
+            try:
+                await interaction.response.edit_message(view=self)
+            except Exception:
+                pass
         return callback
 
 
@@ -471,8 +474,12 @@ def bot_footer() -> str:
 
 def load_state() -> dict:
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
-            return json.load(f)
+        try:
+            with open(STATE_FILE) as f:
+                return json.load(f)
+        except Exception as e:
+            log.error(f"Corrupted stock_state.json — resetting ({e})")
+            os.rename(STATE_FILE, STATE_FILE + ".corrupt")
     return {}
 
 
@@ -483,8 +490,12 @@ def save_state(state: dict):
 
 def load_products_cache() -> dict:
     if os.path.exists(PRODUCTS_CACHE_FILE):
-        with open(PRODUCTS_CACHE_FILE) as f:
-            return json.load(f)
+        try:
+            with open(PRODUCTS_CACHE_FILE) as f:
+                return json.load(f)
+        except Exception as e:
+            log.error(f"Corrupted products_cache.json — resetting ({e})")
+            os.rename(PRODUCTS_CACHE_FILE, PRODUCTS_CACHE_FILE + ".corrupt")
     return {}
 
 

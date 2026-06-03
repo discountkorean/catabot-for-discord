@@ -2406,7 +2406,8 @@ class RestockCog(commands.Cog):
                 self.persist(gid)
                 log.info(f"Updated poll_interval for guild {gid} to {DEFAULT_POLL_INTERVAL}s")
 
-        # Force sold_out and removed to disabled on every store for every guild
+        # One-time migration: set sold_out/removed to False for stores with no existing entry.
+        # Only fills in missing entries — never overwrites existing user-configured values.
         for gid, gs in self.guilds.items():
             changed = False
             store_alerts = gs.setdefault("store_alerts", {})
@@ -2414,17 +2415,8 @@ class RestockCog(commands.Cog):
                 if store_name not in store_alerts:
                     store_alerts[store_name] = _default_store_alerts()
                     changed = True
-                else:
-                    sa = store_alerts[store_name]
-                    if sa.get("sold_out", True):
-                        sa["sold_out"] = False
-                        changed = True
-                    if sa.get("removed", True):
-                        sa["removed"] = False
-                        changed = True
             if changed:
                 self.persist(gid)
-        log.info("Enforced sold_out=False / removed=False defaults across all guilds")
 
         # Resume poll if any guild has an active channel
         any_active = any(self._guild_is_active(g) for g in self.guilds.values())

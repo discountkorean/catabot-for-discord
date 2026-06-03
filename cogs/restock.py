@@ -340,18 +340,22 @@ class CatalogPaginator(discord.ui.View):
 
 
 ALERT_TYPES = [
-    ("restock",  "🔁 Restock"),
-    ("new_item", "🆕 New Item"),
-    ("sold_out", "🔴 Sold Out"),
-    ("removed",  "🗑️ Removed"),
+    ("restock",      "🔁 Restock"),
+    ("new_item",     "🆕 New Item"),
+    ("sold_out",     "🔴 Sold Out"),
+    ("removed",      "🗑️ Removed"),
+    ("price_change", "💲 Price Change"),
 ]
+
+DEFAULT_PRICE_CHANGE_THRESHOLD = 0.10  # 10%
 
 def _default_store_alerts() -> dict:
     return {
-        "restock":  True,
-        "new_item": True,
-        "sold_out": False,
-        "removed":  False,
+        "restock":      True,
+        "new_item":     True,
+        "sold_out":     False,
+        "removed":      False,
+        "price_change": False,
     }
 
 
@@ -1091,18 +1095,46 @@ def make_sold_out_embed(store_name: str, store_url: str, sold_out: dict) -> disc
     return embed
 
 
+def make_price_change_embed(store_name: str, store_url: str, variants: list) -> discord.Embed:
+    """variants: list of variant dicts with extra 'old_price' key."""
+    first  = variants[0]
+    domain = _display_domain(store_url.split("/")[2])
+    embed  = discord.Embed(
+        title=f"💲 Price Change: {first['title']}",
+        color=0x5865F2,
+        timestamp=datetime.now(ZoneInfo("UTC")),
+    )
+    if first.get("image_url"):
+        embed.set_thumbnail(url=first["image_url"])
+    lines = []
+    for v in variants:
+        old_p = f"${float(v['old_price']):.2f}"
+        new_p = f"${float(v['price']):.2f}"
+        label = v["variant_title"]
+        if label.lower() == "default title":
+            lines.append(f"{old_p} → **{new_p}**")
+        else:
+            lines.append(f"**{label}**: {old_p} → **{new_p}**")
+    embed.add_field(name="Price", value="\n".join(lines), inline=False)
+    embed.add_field(name="Store", value=store_name, inline=True)
+    embed.add_field(name="Link",  value=_product_url(store_url, first["handle"]), inline=False)
+    embed.set_footer(text=f"{bot_footer()} • {domain}")
+    return embed
+
+
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
 DEFAULT_POLL_INTERVAL = 300
 
 def _default_guild() -> dict:
     return {
-        "alert_channel_id": None,
-        "stores":           {},
-        "channels":         {},
-        "forum_threads":    {},
-        "subscriptions":    [],
-        "poll_interval":    DEFAULT_POLL_INTERVAL,
+        "alert_channel_id":       None,
+        "stores":                 {},
+        "channels":               {},
+        "forum_threads":          {},
+        "subscriptions":          [],
+        "poll_interval":          DEFAULT_POLL_INTERVAL,
+        "price_change_threshold": DEFAULT_PRICE_CHANGE_THRESHOLD,
     }
 
 
@@ -1160,6 +1192,7 @@ class RestockCog(commands.Cog):
         gs.setdefault("forum_threads", {})
         gs.setdefault("subscriptions", [])
         gs.setdefault("poll_interval", DEFAULT_POLL_INTERVAL)
+        gs.setdefault("price_change_threshold", DEFAULT_PRICE_CHANGE_THRESHOLD)
         gs.setdefault("store_alerts", {})
         # Migrate old notifications dict → subscriptions list
         if "notifications" in gs:
@@ -1373,20 +1406,37 @@ class RestockCog(commands.Cog):
                 log.info(f"Seeded {store_name} ({len(current)} variants)")
                 continue
 
-            restocked, new_items, sold_out, removed = {}, {}, {}, {}
+            restocked, new_items, sold_out, removed, price_changed = {}, {}, {}, {}, {}
             for vid, info in current.items():
                 handle = info["handle"]
                 if vid not in previous:
                     new_items.setdefault(handle, []).append({**info, "variant_id": vid})
-                elif not previous[vid].get("available", True) and info["available"]:
-                    restocked.setdefault(handle, []).append({**info, "variant_id": vid})
-                elif previous[vid].get("available", True) and not info["available"]:
-                    sold_out.setdefault(handle, []).append(info)
+                else:
+                    if not previous[vid].get("available", True) and info["available"]:
+                        restocked.setdefault(handle, []).append({**info, "variant_id": vid})
+                    elif previous[vid].get("available", True) and not info["available"]:
+                        sold_out.setdefault(handle, []).append(info)
 
             # Detect fully removed products (variants in previous but not in current)
             for vid, info in previous.items():
                 if vid not in current:
                     removed.setdefault(info["handle"], []).append(info)
+
+            # Detect price changes (per-guild threshold applied later)
+            for vid, info in current.items():
+                if vid not in previous:
+                    continue
+                try:
+                    old_p = float(previous[vid]["price"])
+                    new_p = float(info["price"])
+                except (ValueError, KeyError):
+                    continue
+                if old_p > 0 and old_p != new_p:
+                    price_changed.setdefault(info["handle"], []).append({
+                        **info,
+                        "variant_id": vid,
+                        "old_price":  previous[vid]["price"],
+                    })
 
             self.state[url] = current
 
@@ -1394,7 +1444,7 @@ class RestockCog(commands.Cog):
             if restocked and watch_subs:
                 await self._dispatch_watch_dms(url, restocked, watch_subs)
 
-            if not restocked and not new_items and not sold_out and not removed:
+            if not restocked and not new_items and not sold_out and not removed and not price_changed:
                 continue
 
             # Route alerts to each due guild that monitors this store
@@ -1470,6 +1520,24 @@ class RestockCog(commands.Cog):
                             continue
                         await channel.send(embed=make_removed_embed(store_name, url, variants))
                         log.info(f"REMOVED: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
+
+                    if price_changed:
+                        threshold = gs.get("price_change_threshold", DEFAULT_PRICE_CHANGE_THRESHOLD)
+                        for variants in price_changed.values():
+                            # Filter to variants that meet this guild's threshold
+                            qualifying = [
+                                v for v in variants
+                                if abs(float(v["price"]) - float(v["old_price"])) / float(v["old_price"]) >= threshold
+                            ]
+                            if not qualifying:
+                                continue
+                            if not _alert_enabled("price_change", qualifying):
+                                continue
+                            await channel.send(
+                                content=_ping_for(qualifying),
+                                embed=make_price_change_embed(store_name, url, qualifying),
+                            )
+                            log.info(f"PRICE CHANGE: {qualifying[0]['title']} @ {store_name} → guild {guild_id_str}")
 
                 except Exception as e:
                     log.error(f"Failed to send alert for {store_name} → guild {guild_id_str}: {e}")
@@ -1922,6 +1990,21 @@ class RestockCog(commands.Cog):
             self.poll.change_interval(seconds=new_min)
 
         await interaction.followup.send(f"✅ Poll interval for this server updated to **{seconds}s** ({seconds // 60}m {seconds % 60}s).")
+
+    @rst_admin.command(name="price_threshold", description="Set minimum price change % to trigger a price alert (default 10%)")
+    @app_commands.describe(percent="Minimum % change required to send an alert (1–100, e.g. 10 = 10%)")
+    async def admin_price_threshold(self, interaction: discord.Interaction, percent: int):
+        if not 1 <= percent <= 100:
+            await interaction.response.send_message("❌ Value must be between **1** and **100**.", ephemeral=True)
+            return
+        gs = self._guild(interaction.guild_id)
+        gs["price_change_threshold"] = percent / 100
+        self.persist(interaction.guild_id)
+        await interaction.response.send_message(
+            f"✅ Price change threshold set to **{percent}%**. "
+            f"Enable price alerts per store via `/rst store`.",
+            ephemeral=True,
+        )
 
     @rst_admin.command(name="add", description="Add a Shopify store to monitor")
     @app_commands.describe(store_name="Display name for the store", url="Store URL (e.g. https://www.houndarchives.com)")

@@ -4,6 +4,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 import logging
 import logging.handlers
+import queue
 import os
 import sys
 import subprocess
@@ -25,14 +26,17 @@ os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 os.makedirs(os.path.dirname(PID_FILE), exist_ok=True)
 
 logging.Formatter.converter = lambda *args: datetime.now(AEST).timetuple()
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s AEST [%(levelname)s] %(message)s",
-    handlers=[
-        logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8"),
-        logging.StreamHandler(),
-    ],
-)
+_log_fmt = logging.Formatter("%(asctime)s AEST [%(levelname)s] %(message)s")
+_file_handler   = logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
+_stream_handler = logging.StreamHandler()
+_file_handler.setFormatter(_log_fmt)
+_stream_handler.setFormatter(_log_fmt)
+_log_queue    = queue.SimpleQueue()
+_queue_handler = logging.handlers.QueueHandler(_log_queue)
+logging.root.setLevel(logging.INFO)
+logging.root.addHandler(_queue_handler)
+_log_listener = logging.handlers.QueueListener(_log_queue, _file_handler, _stream_handler, respect_handler_level=True)
+_log_listener.start()
 log = logging.getLogger(__name__)
 
 DATA_DIR = os.path.join(BASE_DIR, "data")

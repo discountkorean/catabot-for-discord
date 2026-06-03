@@ -1196,6 +1196,10 @@ class RestockCog(commands.Cog):
         gs.setdefault("poll_interval", DEFAULT_POLL_INTERVAL)
         gs.setdefault("price_change_threshold", DEFAULT_PRICE_CHANGE_THRESHOLD)
         gs.setdefault("store_alerts", {})
+        # Ensure price_change is explicitly False for every store that doesn't have it set yet
+        for store_name in gs.get("stores", {}):
+            sa = gs["store_alerts"].setdefault(store_name, _default_store_alerts())
+            sa.setdefault("price_change", False)
         # Migrate old notifications dict → subscriptions list
         if "notifications" in gs:
             if _migrate_notifications(gs):

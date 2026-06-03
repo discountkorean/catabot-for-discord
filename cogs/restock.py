@@ -1696,7 +1696,7 @@ class RestockCog(commands.Cog):
         domain    = _display_domain(store_url.split("/")[2])
         base_url  = f"https://{domain}"
 
-        relevant = [s for s in gs.get("subscriptions", []) if not s["stores"] or store_name in s["stores"]]
+        relevant = [s for s in gs.get("subscriptions", []) if s.get("type") in ("user", "role") and (not s.get("stores") or store_name in s.get("stores", []))]
         user_subs = [s for s in relevant if s["type"] == "user"]
         role_subs = [s for s in relevant if s["type"] == "role"]
 

@@ -108,11 +108,10 @@ class SearchPaginator(discord.ui.View):
         base      = _base_url(store_url)
         await interaction.response.defer(ephemeral=True)
         try:
-            product = await asyncio.to_thread(
-                lambda: _normalize_product_js(
-                    _HTTP.get(f"{base}/products/{r.handle}.js", timeout=10).json()
-                )
-            )
+            def _fetch_product():
+                with _HTTP.get(f"{base}/products/{r.handle}.js", timeout=10) as resp:
+                    return _normalize_product_js(resp.json())
+            product = await asyncio.to_thread(_fetch_product)
         except Exception:
             await interaction.followup.send("Could not fetch product details. Please try again.", ephemeral=True)
             return
@@ -436,8 +435,13 @@ HEADERS = {
 
 # Shared session — keep-alive reuses existing TCP connections instead of
 # opening a new one (and burning an ephemeral port) on every poll cycle.
+# Pool limits prevent socket buffer exhaustion on Windows (WinError 10055).
+from requests.adapters import HTTPAdapter
 _HTTP = requests.Session()
 _HTTP.headers.update(HEADERS)
+_adapter = HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=0)
+_HTTP.mount("https://", _adapter)
+_HTTP.mount("http://", _adapter)
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
@@ -557,26 +561,25 @@ def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> tuple[list,
 
     # ── Page 1 ────────────────────────────────────────────────────────────────
     try:
-        r = session.get(base_url, timeout=15)
-        if r.status_code == 429:
-            time.sleep(5)
-            r = session.get(base_url, timeout=15)
-        if r.status_code in (401, 403) or "password" in r.url:
-            return [], True
-        r.raise_for_status()
-        data = r.json()
+        with session.get(base_url, timeout=15) as r:
+            if r.status_code == 429:
+                time.sleep(5)
+            if r.status_code in (401, 403) or "password" in r.url:
+                return [], True
+            r.raise_for_status()
+            data = r.json()
         if not isinstance(data, dict):
             return [], False
         batch = data.get(key, [])
         results.extend(batch)
+        link_header_p1 = r.headers.get("Link", "")
     except Exception as e:
         log.error(f"Failed to fetch page 1 of {url}: {e}")
         return [], False
 
     # ── Decide pagination strategy from the first response ────────────────────
-    link_header = r.headers.get("Link", "")
     next_url    = None
-    for part in link_header.split(","):
+    for part in link_header_p1.split(","):
         if 'rel="next"' in part:
             m = re.search(r"<([^>]+)>", part)
             if m:
@@ -595,23 +598,24 @@ def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> tuple[list,
             page_num += 1
             time.sleep(delay)
             try:
-                r = session.get(next_url, timeout=15)
-                if r.status_code == 429:
-                    log.warning(f"Rate limited on page {page_num}, retrying in 5s")
-                    time.sleep(5)
-                    continue
-                if r.status_code in (401, 403) or "password" in r.url:
-                    password_locked = True
-                    break
-                r.raise_for_status()
-                data = r.json()
+                with session.get(next_url, timeout=15) as r:
+                    if r.status_code == 429:
+                        log.warning(f"Rate limited on page {page_num}, retrying in 5s")
+                        time.sleep(5)
+                        continue
+                    if r.status_code in (401, 403) or "password" in r.url:
+                        password_locked = True
+                        break
+                    r.raise_for_status()
+                    data     = r.json()
+                    lh       = r.headers.get("Link", "")
                 if not isinstance(data, dict):
                     break
                 batch = data.get(key, [])
                 results.extend(batch)
 
                 next_url = None
-                for part in r.headers.get("Link", "").split(","):
+                for part in lh.split(","):
                     if 'rel="next"' in part:
                         m = re.search(r"<([^>]+)>", part)
                         if m:
@@ -634,16 +638,16 @@ def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> tuple[list,
             page_url = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
             time.sleep(delay)
             try:
-                r = session.get(page_url, timeout=15)
-                if r.status_code == 429:
-                    log.warning(f"Rate limited on page {page_num}, retrying in 5s")
-                    time.sleep(5)
-                    continue
-                if r.status_code in (401, 403) or "password" in r.url:
-                    password_locked = True
-                    break
-                r.raise_for_status()
-                data = r.json()
+                with session.get(page_url, timeout=15) as r:
+                    if r.status_code == 429:
+                        log.warning(f"Rate limited on page {page_num}, retrying in 5s")
+                        time.sleep(5)
+                        continue
+                    if r.status_code in (401, 403) or "password" in r.url:
+                        password_locked = True
+                        break
+                    r.raise_for_status()
+                    data = r.json()
                 if not isinstance(data, dict):
                     break
                 batch = data.get(key, [])
@@ -677,13 +681,13 @@ def _fetch_watched_handles_sync(base: str, handles: list[str]) -> list:
     session = _HTTP
     for handle in handles:
         try:
-            r = session.get(f"{base}/products/{handle}.js", timeout=10)
-            if r.status_code == 404:
-                products.append({"handle": handle, "_removed": True})
-                continue
-            if not r.ok:
-                continue
-            products.append(_normalize_product_js(r.json()))
+            with session.get(f"{base}/products/{handle}.js", timeout=10) as r:
+                if r.status_code == 404:
+                    products.append({"handle": handle, "_removed": True})
+                    continue
+                if not r.ok:
+                    continue
+                products.append(_normalize_product_js(r.json()))
         except Exception as e:
             log.error(f"Failed to fetch watched handle {handle}: {e}")
     return products
@@ -697,7 +701,7 @@ def _search_suggest_sync(base: str, query: str, limit: int = 10) -> list:
     """
     session = _HTTP
     try:
-        r = session.get(
+        with session.get(
             f"{base}/search/suggest.json",
             params={
                 "q": query,
@@ -707,14 +711,14 @@ def _search_suggest_sync(base: str, query: str, limit: int = 10) -> list:
                 "resources[options][fields]": "title,variants.title,vendor",
             },
             timeout=10,
-        )
-        if not r.ok:
-            return []
-        handles = [
-            p["handle"]
-            for p in r.json().get("resources", {}).get("results", {}).get("products", [])
-            if p.get("handle")
-        ]
+        ) as r:
+            if not r.ok:
+                return []
+            handles = [
+                p["handle"]
+                for p in r.json().get("resources", {}).get("results", {}).get("products", [])
+                if p.get("handle")
+            ]
     except Exception as e:
         log.error(f"suggest failed for {base}: {e}")
         return []
@@ -722,10 +726,10 @@ def _search_suggest_sync(base: str, query: str, limit: int = 10) -> list:
     products = []
     for handle in handles:
         try:
-            rp = session.get(f"{base}/products/{handle}.js", timeout=10)
-            if not rp.ok:
-                continue
-            products.append(_normalize_product_js(rp.json()))
+            with session.get(f"{base}/products/{handle}.js", timeout=10) as rp:
+                if not rp.ok:
+                    continue
+                products.append(_normalize_product_js(rp.json()))
         except Exception as e:
             log.error(f"product .js fetch failed for {base}/products/{handle}: {e}")
     return products
@@ -747,12 +751,12 @@ def _probe_shopify_sync(url: str) -> bool:
     """Return True if the URL is a valid, reachable Shopify products.json endpoint."""
     for attempt in range(2):
         try:
-            r = _HTTP.get(url, timeout=20)
-            if r.status_code in (401, 403) or "password" in r.url:
-                return False
-            if not r.ok:
-                return False
-            data = r.json()
+            with _HTTP.get(url, timeout=20) as r:
+                if r.status_code in (401, 403) or "password" in r.url:
+                    return False
+                if not r.ok:
+                    return False
+                data = r.json()
             return isinstance(data, dict) and "products" in data
         except requests.exceptions.Timeout:
             if attempt == 0:
@@ -1114,6 +1118,10 @@ class RestockCog(commands.Cog):
         # Detect legacy single-guild format and migrate in on_ready
         if not self.guilds and ("alert_channel_id" in raw or "guilds" in raw):
             self._legacy_state = raw
+
+    async def cog_unload(self):
+        self.poll.cancel()
+        _HTTP.close()
 
     # ── Guild state helpers ───────────────────────────────────────────────────
 

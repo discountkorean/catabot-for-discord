@@ -1912,6 +1912,7 @@ class RestockCog(commands.Cog):
             return
 
         gs["stores"][store_name] = discovered
+        gs.setdefault("store_alerts", {})[store_name] = _default_store_alerts()
         self.persist(interaction.guild_id)
         domain = _display_domain(discovered.split("/")[2])
         await interaction.followup.send(f"✅ Added **{store_name}**\n🔗 `https://{domain}`")

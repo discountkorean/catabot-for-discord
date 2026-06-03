@@ -2406,17 +2406,6 @@ class RestockCog(commands.Cog):
                 self.persist(gid)
                 log.info(f"Updated poll_interval for guild {gid} to {DEFAULT_POLL_INTERVAL}s")
 
-        # One-time migration: set sold_out/removed to False for stores with no existing entry.
-        # Only fills in missing entries — never overwrites existing user-configured values.
-        for gid, gs in self.guilds.items():
-            changed = False
-            store_alerts = gs.setdefault("store_alerts", {})
-            for store_name in gs.get("stores", {}):
-                if store_name not in store_alerts:
-                    store_alerts[store_name] = _default_store_alerts()
-                    changed = True
-            if changed:
-                self.persist(gid)
 
         # Resume poll if any guild has an active channel
         any_active = any(self._guild_is_active(g) for g in self.guilds.values())

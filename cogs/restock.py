@@ -2390,13 +2390,17 @@ class RestockCog(commands.Cog):
             changed = False
             store_alerts = gs.setdefault("store_alerts", {})
             for store_name in gs.get("stores", {}):
-                sa = store_alerts.setdefault(store_name, _default_store_alerts())
-                if sa.get("sold_out", True):
-                    sa["sold_out"] = False
+                if store_name not in store_alerts:
+                    store_alerts[store_name] = _default_store_alerts()
                     changed = True
-                if sa.get("removed", True):
-                    sa["removed"] = False
-                    changed = True
+                else:
+                    sa = store_alerts[store_name]
+                    if sa.get("sold_out", True):
+                        sa["sold_out"] = False
+                        changed = True
+                    if sa.get("removed", True):
+                        sa["removed"] = False
+                        changed = True
             if changed:
                 self.persist(gid)
         log.info("Enforced sold_out=False / removed=False defaults across all guilds")

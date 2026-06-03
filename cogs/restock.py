@@ -1297,10 +1297,21 @@ class RestockCog(commands.Cog):
                 due_stores[sname] = surl
                 store_guilds.setdefault(sname, []).append(guild_name)
 
-        for store_name, url in due_stores.items():
+        # Fetch all stores concurrently (max 5 at a time to avoid socket pressure)
+        sem = asyncio.Semaphore(5)
+        fetch_results = {}  # store_name → (products, password_locked)
+
+        async def _fetch_store(store_name: str, url: str):
             guild_label = ", ".join(store_guilds.get(store_name, []))
             log.info(f"Checking {store_name} [{guild_label}]...")
-            products, password_locked = await fetch_products(url)
+            async with sem:
+                products, password_locked = await fetch_products(url)
+            fetch_results[store_name] = (products, password_locked)
+
+        await asyncio.gather(*[_fetch_store(n, u) for n, u in due_stores.items()])
+
+        for store_name, url in due_stores.items():
+            products, password_locked = fetch_results.get(store_name, ([], False))
 
             # ── Password page detection ───────────────────────────────────────
             was_locked = self.password_state.get(url, False)

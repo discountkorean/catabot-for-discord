@@ -9,18 +9,13 @@ $stopFile = Join-Path $dir "data\bot.stop"
 $restartHours = @(4, 16)   # 04:00 and 16:00
 
 # Resolve Python executable
-$preferred = "C:\Users\Adam\AppData\Local\Python\pythoncore-3.14-64\pythonw.exe"
+$preferred = "C:\Users\Adam\AppData\Local\Python\pythoncore-3.14-64\python.exe"
 if (Test-Path $preferred) {
     $pythonw = $preferred
 } else {
-    $pythonw = where.exe pythonw 2>$null |
+    $pythonw = where.exe python 2>$null |
                Where-Object { $_ -notlike "*WindowsApps*" } |
                Select-Object -First 1
-    if (-not $pythonw) {
-        $pythonw = where.exe python 2>$null |
-                   Where-Object { $_ -notlike "*WindowsApps*" } |
-                   Select-Object -First 1
-    }
     if (-not $pythonw) { throw "Could not find Python executable." }
 }
 
@@ -50,6 +45,7 @@ while ($true) {
     $p = Start-Process $pythonw `
         -ArgumentList "`"$botFile`"" `
         -WorkingDirectory $dir `
+        -WindowStyle Normal `
         -PassThru
     $p.Id | Out-File -Encoding ascii $pidFile
     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Bot running (PID $($p.Id))"

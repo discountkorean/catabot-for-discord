@@ -1284,13 +1284,19 @@ class RestockCog(commands.Cog):
         if not due_guilds:
             return
 
-        # Collect stores needed by due guilds only
-        due_stores = {}
-        for gs in due_guilds.values():
-            due_stores.update(gs.get("stores", {}))
+        # Collect stores needed by due guilds only, tracking which guilds need each store
+        due_stores = {}       # store_name → url
+        store_guilds = {}     # store_name → list of guild names
+        for gid_str, gs in due_guilds.items():
+            guild_obj  = self.bot.get_guild(int(gid_str))
+            guild_name = guild_obj.name if guild_obj else gid_str
+            for sname, surl in gs.get("stores", {}).items():
+                due_stores[sname] = surl
+                store_guilds.setdefault(sname, []).append(guild_name)
 
         for store_name, url in due_stores.items():
-            log.info(f"Checking {store_name}...")
+            guild_label = ", ".join(store_guilds.get(store_name, []))
+            log.info(f"Checking {store_name} [{guild_label}]...")
             products, password_locked = await fetch_products(url)
 
             # ── Password page detection ───────────────────────────────────────

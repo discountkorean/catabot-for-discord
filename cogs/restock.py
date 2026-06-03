@@ -347,7 +347,12 @@ ALERT_TYPES = [
 ]
 
 def _default_store_alerts() -> dict:
-    return {k: True for k, _ in ALERT_TYPES}
+    return {
+        "restock":  True,
+        "new_item": True,
+        "sold_out": False,
+        "removed":  False,
+    }
 
 
 class AlertToggleView(discord.ui.View):
@@ -2379,6 +2384,22 @@ class RestockCog(commands.Cog):
                 gs["poll_interval"] = DEFAULT_POLL_INTERVAL
                 self.persist(gid)
                 log.info(f"Updated poll_interval for guild {gid} to {DEFAULT_POLL_INTERVAL}s")
+
+        # Force sold_out and removed to disabled on every store for every guild
+        for gid, gs in self.guilds.items():
+            changed = False
+            store_alerts = gs.setdefault("store_alerts", {})
+            for store_name in gs.get("stores", {}):
+                sa = store_alerts.setdefault(store_name, _default_store_alerts())
+                if sa.get("sold_out", True):
+                    sa["sold_out"] = False
+                    changed = True
+                if sa.get("removed", True):
+                    sa["removed"] = False
+                    changed = True
+            if changed:
+                self.persist(gid)
+        log.info("Enforced sold_out=False / removed=False defaults across all guilds")
 
         # Resume poll if any guild has an active channel
         any_active = any(self._guild_is_active(g) for g in self.guilds.values())

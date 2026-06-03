@@ -379,9 +379,10 @@ class AlertToggleView(discord.ui.View):
 
     def _rebuild(self):
         self.clear_items()
-        alerts = self._alerts()
+        alerts   = self._alerts()
+        defaults = _default_store_alerts()
         for key, label in ALERT_TYPES:
-            enabled = alerts.get(key, True)
+            enabled = alerts.get(key, defaults.get(key, False))
             btn = discord.ui.Button(
                 label=label,
                 style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.secondary,
@@ -396,8 +397,9 @@ class AlertToggleView(discord.ui.View):
             store_alerts = gs.setdefault("store_alerts", {})
             if self.store_name not in store_alerts:
                 store_alerts[self.store_name] = _default_store_alerts()
-            alerts = store_alerts[self.store_name]
-            alerts[key] = not alerts.get(key, True)
+            alerts   = store_alerts[self.store_name]
+            defaults = _default_store_alerts()
+            alerts[key] = not alerts.get(key, defaults.get(key, False))
             self.cog.persist(self.guild_id)
             self._rebuild()
             try:
@@ -1473,7 +1475,7 @@ class RestockCog(commands.Cog):
 
                 def _alert_enabled(key: str, variants_list: list) -> bool:
                     """True if the alert type is toggled on, OR any subscription matches these variants."""
-                    if alerts.get(key, True):
+                    if alerts.get(key, _default_store_alerts().get(key, False)):
                         return True
                     subs = gs.get("subscriptions", [])
                     return any(
@@ -2339,7 +2341,8 @@ class RestockCog(commands.Cog):
 
         results   = results[:MAX_SEARCH_RESULTS]
         paginator = SearchPaginator(results, cog=self, guild_id=interaction.guild_id)
-        await interaction.followup.send(embed=paginator.build_embed(), view=paginator)
+        content   = f"**Live stock check** — {chosen[0]} · `{query}`" if len(chosen) == 1 else None
+        await interaction.followup.send(content=content, embed=paginator.build_embed(), view=paginator)
 
     @tracker.command(name="watch", description="Watch a product for restocks — get a DM when your variant drops")
     @app_commands.describe(store_name="Store to search", query="Product name or keyword")
@@ -2406,36 +2409,6 @@ class RestockCog(commands.Cog):
         pages    = [products[i:i + CATALOG_PAGE_SIZE] for i in range(0, len(products), CATALOG_PAGE_SIZE)]
         view     = CatalogPaginator(store_name, store_url, pages)
         await interaction.followup.send(embed=view.build_embed(), view=view)
-
-    @tracker.command(name="check", description="On-demand stock check for a specific product")
-    @app_commands.describe(store_name="Store to check", query="Product name or handle")
-    @app_commands.autocomplete(store_name=_store_autocomplete)
-    async def tracker_check(self, interaction: discord.Interaction, store_name: str, query: str):
-        await interaction.response.defer()
-        stores = self._guild_stores(interaction.guild_id)
-
-        if store_name not in stores:
-            await interaction.followup.send(f"❌ **{store_name}** is not a monitored store.")
-            return
-
-        store_url = stores[store_name]
-        base      = _base_url(store_url)
-        products  = await search_suggest(base, query)
-
-        if not products:
-            await interaction.followup.send(f"No products found matching **{query}** in **{store_name}**.")
-            return
-
-        results = []
-        for product in products[:MAX_SEARCH_RESULTS]:
-            results.append(SearchResult(store_name, store_url, product))
-
-        paginator = SearchPaginator(results, cog=self, guild_id=interaction.guild_id)
-        await interaction.followup.send(
-            content=f"**Live stock check** — {store_name} · `{query}`",
-            embed=paginator.build_embed(),
-            view=paginator,
-        )
 
     # ── Startup ───────────────────────────────────────────────────────────────
 

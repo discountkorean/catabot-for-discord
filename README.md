@@ -1,24 +1,27 @@
 # cata.ai
 
-A Discord bot that monitors Shopify stores for restocks, new drops, sold out and removed items — pinging subscribed users or roles when stock changes are detected.
+A Discord bot that monitors Shopify stores for restocks, new drops, price changes, sold out and removed items — pinging subscribed users or roles when stock changes are detected.
 
 ## Features
 
 - Polls Shopify `products.json` endpoints on a configurable per-server interval (default 5 minutes)
 - Full pagination support — fetches all products regardless of catalog size (cursor-based and page-based fallback)
-- Detects restocks, new items, sold out, and removed products
+- Detects restocks, new items, price changes, sold out, and removed products
+- Price change alerts — configurable percentage threshold per server (default 10%), toggled per store
 - Filtered subscriptions — subscribe by store, product name keywords, and/or size
 - Role subscriptions — admins can subscribe a Discord role to receive pings
 - Fuzzy size matching: XS / XSMALL / x-small all resolve to the same canonical size
 - Multi-keyword name filtering with AND logic (item must contain all keywords)
 - Per-store channel routing — send alerts to specific channels, threads, or forums
 - Forum support — auto-creates a persistent post per store, replies into it
-- Mass drop aggregation — collapses large drops (>5 items) into a single embed and ping
+- Mass drop aggregation — collapses large drops into a single embed and ping (threshold configurable per server)
+- Add to Cart buttons on restock, new item, and price change alerts (one per available variant)
 - Paginated product catalog with stock status per item
 - Auto-discovers Shopify endpoints from human-friendly URLs
 - Silently skips password-protected or unreachable stores
 - Full multi-server support — each server manages its own stores and settings
 - Per-server data and full product cache persisted locally
+- Non-blocking logging via QueueHandler — no event loop stalls under load
 - Watchdog auto-restarts the bot on crash with smart backoff for socket exhaustion
 
 ## Setup
@@ -77,7 +80,7 @@ Reboot after running. Sets `TcpTimedWaitDelay=30s` and expands the ephemeral por
 | `/rst subscribe [store] [names] [sizes]` | Subscribe to alerts with optional filters |
 | `/rst unsubscribe <id>` | Remove a subscription by ID |
 | `/rst subscriptions [user]` | List your active subscriptions |
-| `/rst store [store]` | Store info, alert channel, and subscribers |
+| `/rst store [store]` | Store info, alert toggles, channel, and subscribers |
 | `/rst user [user]` | A user's subscriptions |
 | `/rst catalog [store]` | Browse all products with stock status and price |
 | `/rst search [query] [stores...]` | Search for a product across stores |
@@ -104,16 +107,18 @@ All parameters optional — omitting all subscribes to everything.
 |---|---|
 | `/rst-admin start [channel]` | Start monitoring and set the default alert channel |
 | `/rst-admin stop` | Stop monitoring for this server |
-| `/rst-admin interval [seconds]` | Set poll interval (60–600s) |
-| `/rst-admin add [name] [url]` | Add a Shopify store |
+| `/rst-admin interval <seconds>` | Set poll interval (60–600s) |
+| `/rst-admin add <name> <url>` | Add a Shopify store |
 | `/rst-admin remove [store...]` | Remove up to 5 stores |
 | `/rst-admin channel [store] [channel]` | Set a dedicated channel, thread, or forum for a store |
-| `/rst-admin subscribe [target] [store] [names] [sizes]` | Create a filtered subscription for a user or role |
+| `/rst-admin subscribe <target> [store] [names] [sizes]` | Create a filtered subscription for a user or role |
 | `/rst-admin unsubscribe <id>` | Remove any subscription by ID |
-| `/rst-admin recent [store] [channel]` | Post the most recently updated item |
-| `/rst-admin alert [store] [channel]` | Send a fake restock alert for testing |
+| `/rst-admin recent <store> [channel]` | Post the most recently updated item |
+| `/rst-admin alert <store> [channel]` | Send a fake restock alert for testing |
 | `/rst-admin export` | Export store list as a shareable code |
-| `/rst-admin import [code]` | Import a store list from an export code |
+| `/rst-admin import <code>` | Import a store list from an export code |
+| `/rst-admin price_threshold <percent>` | Set minimum price change % to trigger a price alert (default 10) |
+| `/rst-admin aggregate_threshold <count>` | Set how many changed products trigger mass-drop mode (default 20) |
 
 #### Per-store channel routing
 
@@ -132,13 +137,16 @@ Omit the channel argument to revert a store to the server default.
 
 ## Alert Types
 
-| Alert | Pings subscribers? | Notes |
-|---|---|---|
-| 🔔 Back in Stock | ✅ Yes | |
-| 🆕 New Item | ✅ Yes | |
-| 📦 Mass Drop | ✅ Yes (once) | Triggered when >20 items drop in one cycle — shows a summary instead of listing all products |
-| 🔴 Sold Out | ❌ No | |
-| 🗑️ Item Removed | ❌ No | |
+Alerts are toggled per store via `/rst store`. All alert types default to off except Restock and New Item.
+
+| Alert | Default | Pings subscribers? | Notes |
+|---|---|---|---|
+| 🔔 Back in Stock | ✅ On | ✅ Yes | Includes Add to Cart buttons per available variant |
+| 🆕 New Item | ✅ On | ✅ Yes | Includes Add to Cart buttons per available variant |
+| 📦 Mass Drop | ✅ On | ✅ Yes (once) | Fires when changed items exceed the aggregate threshold — shows a summary |
+| 🔴 Sold Out | ❌ Off | ❌ No | |
+| 🗑️ Item Removed | ❌ Off | ❌ No | |
+| 💲 Price Change | ❌ Off | ✅ Yes | Only fires if price moves ≥ server threshold (default 10%). Includes Add to Cart buttons |
 
 ## Project Structure
 
@@ -159,7 +167,7 @@ catabot-for-discord/
 │   └── {guild_id}/
 │       └── state.json
 └── scripts/
-    ├── watchdog.ps1        # PowerShell watchdog (launched by watchdog.bat)
+    ├── watchdog.ps1         # PowerShell watchdog (launched by watchdog.bat)
     ├── apply-tcp-tuning.ps1 # One-time Windows TCP registry fix
     └── check_pagination.py  # Diagnostic — test Shopify pagination for a store URL
 ```

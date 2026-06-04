@@ -1787,8 +1787,9 @@ class RestockCog(commands.Cog):
     # ── Admin commands (/rst-admin) ──────────────────────────────────────────
 
     @rst_admin.command(name="start", description="Start monitoring and set the alert channel")
-    @app_commands.describe(channel="Channel to send alerts to (defaults to current channel)")
-    async def admin_start(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
+    @app_commands.describe(channel="Channel, thread, or forum to send alerts to (defaults to current channel)")
+    async def admin_start(self, interaction: discord.Interaction,
+                          channel: discord.TextChannel | discord.Thread | discord.ForumChannel = None):
         await interaction.response.defer()
         gs            = self._guild(interaction.guild_id)
         alert_channel = channel or interaction.channel
@@ -1804,9 +1805,13 @@ class RestockCog(commands.Cog):
 
         stores     = self._guild_stores(interaction.guild_id)
         store_list = "\n".join(f"• {name}" for name in stores) or "No stores added yet — use `/rst-admin add`"
+        if isinstance(alert_channel, discord.ForumChannel):
+            ch_desc = f"{alert_channel.mention} (forum — each store gets its own thread)"
+        else:
+            ch_desc = alert_channel.mention
         embed = discord.Embed(
             title="🟢 Tracker Started",
-            description=f"Alerts → {alert_channel.mention}\n\n**{len(stores)}** store(s) monitored:\n{store_list}",
+            description=f"Alerts → {ch_desc}\n\n**{len(stores)}** store(s) monitored:\n{store_list}",
             color=0x5865F2,
             timestamp=datetime.now(ZoneInfo("UTC")),
         )
@@ -2169,7 +2174,12 @@ class RestockCog(commands.Cog):
         for sub in gs.get("subscriptions", []):
             for v in fake_variants:
                 if _sub_matches(sub, store_name, v):
-                    (user_ids if sub["type"] == "user" else role_ids).add(sub["target_id"])
+                    if sub["type"] == "user":
+                        if interaction.guild.get_member(sub["target_id"]):
+                            user_ids.add(sub["target_id"])
+                    else:
+                        if interaction.guild.get_role(sub["target_id"]):
+                            role_ids.add(sub["target_id"])
                     break
         pings = [f"<@{uid}>" for uid in user_ids] + [f"<@&{rid}>" for rid in role_ids]
         ping  = " ".join(pings) if pings else None

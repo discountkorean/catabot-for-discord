@@ -1141,25 +1141,6 @@ def _default_guild() -> dict:
     }
 
 
-def make_password_embed(store_name: str, store_url: str, locked: bool) -> discord.Embed:
-    domain = _display_domain(store_url.split("/")[2])
-    if locked:
-        embed = discord.Embed(
-            title=f"🔒 Store Locked: {store_name}",
-            description="The store is now password-protected. This often signals an upcoming drop.",
-            color=0xED4245,
-            timestamp=datetime.now(ZoneInfo("UTC")),
-        )
-    else:
-        embed = discord.Embed(
-            title=f"🔓 Store Live: {store_name}",
-            description="The password page is down — the store is accessible again.",
-            color=0x57F287,
-            timestamp=datetime.now(ZoneInfo("UTC")),
-        )
-    embed.set_footer(text=f"{bot_footer()} • {domain}")
-    return embed
-
 
 class RestockCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -1169,7 +1150,6 @@ class RestockCog(commands.Cog):
         raw                  = load_bot_state()
         self.guilds: dict    = load_all_guilds()
         self._last_polled: dict  = {}   # guild_id_str → last poll timestamp
-        self.password_state: dict[str, bool] = {}  # store_url → currently locked
 
         # Detect legacy single-guild format and migrate in on_ready
         if not self.guilds and ("alert_channel_id" in raw or "guilds" in raw):
@@ -1365,19 +1345,7 @@ class RestockCog(commands.Cog):
         await asyncio.gather(*[_fetch_store(n, u) for n, u in due_stores.items()])
 
         for store_name, url in due_stores.items():
-            products, password_locked = fetch_results.get(store_name, ([], False))
-
-            # ── Password page detection ───────────────────────────────────────
-            was_locked = self.password_state.get(url, False)
-            if password_locked != was_locked:
-                self.password_state[url] = password_locked
-                for gid_str, gs in due_guilds.items():
-                    if store_name not in gs.get("stores", {}):
-                        continue
-                    ch = await self._resolve_store_channel(gs, store_name, gid_str)
-                    if ch:
-                        await ch.send(embed=make_password_embed(store_name, url, password_locked))
-                        log.info(f"{'LOCKED' if password_locked else 'UNLOCKED'}: {store_name} → guild {gid_str}")
+            products, _ = fetch_results.get(store_name, ([], False))
 
             if not products:
                 continue

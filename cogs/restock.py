@@ -456,7 +456,7 @@ HEADERS = {
 from requests.adapters import HTTPAdapter
 _HTTP = requests.Session()
 _HTTP.headers.update(HEADERS)
-_adapter = HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=0)
+_adapter = HTTPAdapter(pool_connections=30, pool_maxsize=2, max_retries=0)
 _HTTP.mount("https://", _adapter)
 _HTTP.mount("http://", _adapter)
 
@@ -629,7 +629,7 @@ def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> tuple[list,
                     if r.status_code == 429:
                         log.warning(f"Rate limited on page {page_num}, retrying in 5s")
                         time.sleep(5)
-                        continue
+                        r = session.get(next_url, timeout=15)
                     if r.status_code in (401, 403) or "password" in r.url:
                         password_locked = True
                         break
@@ -669,7 +669,7 @@ def _fetch_paginated_sync(url: str, key: str, delay: float = 0.5) -> tuple[list,
                     if r.status_code == 429:
                         log.warning(f"Rate limited on page {page_num}, retrying in 5s")
                         time.sleep(5)
-                        continue
+                        r = session.get(page_url, timeout=15)
                     if r.status_code in (401, 403) or "password" in r.url:
                         password_locked = True
                         break
@@ -1137,6 +1137,7 @@ def _default_guild() -> dict:
         "subscriptions":          [],
         "poll_interval":          DEFAULT_POLL_INTERVAL,
         "price_change_threshold": DEFAULT_PRICE_CHANGE_THRESHOLD,
+        "aggregate_threshold":    AGGREGATE_THRESHOLD,
     }
 
 
@@ -1195,6 +1196,7 @@ class RestockCog(commands.Cog):
         gs.setdefault("subscriptions", [])
         gs.setdefault("poll_interval", DEFAULT_POLL_INTERVAL)
         gs.setdefault("price_change_threshold", DEFAULT_PRICE_CHANGE_THRESHOLD)
+        gs.setdefault("aggregate_threshold", AGGREGATE_THRESHOLD)
         gs.setdefault("store_alerts", {})
         # Ensure price_change is explicitly False for every store that doesn't have it set yet
         for store_name in gs.get("stores", {}):
@@ -1406,6 +1408,14 @@ class RestockCog(commands.Cog):
 
             previous = self.state.get(url)
 
+            # Guard against partial fetches corrupting state (e.g. mid-fetch socket error)
+            if previous and len(current) < len(previous) * 0.7:
+                log.warning(
+                    f"Skipping state update for {store_name}: got {len(current)} variants "
+                    f"vs {len(previous)} previously — likely partial fetch"
+                )
+                continue
+
             # Cold-start: seed silently, no alerts
             if previous is None:
                 self.state[url] = current
@@ -1489,8 +1499,9 @@ class RestockCog(commands.Cog):
                     )
 
                 try:
-                    alert_count = len(restocked) + len(new_items)
-                    if alert_count > AGGREGATE_THRESHOLD:
+                    alert_count       = len(restocked) + len(new_items)
+                    agg_threshold     = gs.get("aggregate_threshold", AGGREGATE_THRESHOLD)
+                    if alert_count > agg_threshold:
                         all_variants = [v for vlist in list(restocked.values()) + list(new_items.values()) for v in vlist]
                         if _alert_enabled("restock", all_variants) or _alert_enabled("new_item", all_variants):
                             ping = _ping_for(all_variants)
@@ -2009,6 +2020,21 @@ class RestockCog(commands.Cog):
         await interaction.response.send_message(
             f"✅ Price change threshold set to **{percent}%**. "
             f"Enable price alerts per store via `/rst store`.",
+            ephemeral=True,
+        )
+
+    @rst_admin.command(name="aggregate_threshold", description="Set how many changed products trigger a mass-drop summary instead of individual alerts (default 20)")
+    @app_commands.describe(count="Product count, e.g. 200 for large stores. Use 9999 to disable aggregation.")
+    async def admin_aggregate_threshold(self, interaction: discord.Interaction, count: int):
+        if count < 1:
+            await interaction.response.send_message("❌ Value must be at least **1**.", ephemeral=True)
+            return
+        gs = self._guild(interaction.guild_id)
+        gs["aggregate_threshold"] = count
+        self.persist(interaction.guild_id)
+        await interaction.response.send_message(
+            f"✅ Aggregate threshold set to **{count}** products. "
+            f"Polls with ≤ {count} changed items will send individual alerts.",
             ephemeral=True,
         )
 

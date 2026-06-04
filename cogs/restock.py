@@ -914,7 +914,7 @@ def _format_sizes(variant_titles: list[str]) -> tuple[str, str]:
 
 
 def _product_url(store_url: str, handle: str) -> str:
-    base   = store_url.split("?")[0].rstrip("/products.json").rstrip("/")
+    base   = store_url.split("?")[0].removesuffix("/products.json").rstrip("/")
     scheme, _, domain_path = base.partition("://")
     parts  = domain_path.split("/", 1)
     domain = _display_domain(parts[0])
@@ -984,10 +984,12 @@ def make_aggregate_embed(store_name: str, store_url: str,
 
 
 def make_restock_embed(store_name: str, store_url: str, variants: list) -> discord.Embed:
+    from urllib.parse import urlparse
     first           = variants[0]
     size_name, sizes = _format_sizes([v["variant_title"] for v in variants])
     price           = f"${float(first['price']):.2f}"
-    domain          = _display_domain(store_url.split("/")[2])
+    domain          = _display_domain(urlparse(store_url).netloc)
+    product_url     = _product_url(store_url, first["handle"])
     embed  = discord.Embed(
         title=f"🔔 Back in Stock: {first['title']}",
         color=0x57F287,
@@ -999,23 +1001,30 @@ def make_restock_embed(store_name: str, store_url: str, variants: list) -> disco
     embed.add_field(name="Price", value=price,             inline=True)
     embed.add_field(name="Store", value=store_name,        inline=True)
     embed.add_field(name="Stock", value="✅ In Stock",     inline=True)
-    embed.add_field(name="Link",  value=_product_url(store_url, first["handle"]), inline=False)
+    link_parts = [f"[View Product]({product_url})"]
+    for v in variants[:20]:
+        if v.get("variant_id"):
+            label = v.get("variant_title", "")
+            label = "Add to Cart" if not label or label.lower() == "default title" else label
+            link_parts.append(f"[{label}](https://{domain}/cart/{v['variant_id']}:1)")
+    embed.add_field(name="Links", value="  ".join(link_parts), inline=False)
     embed.set_footer(text=f"{bot_footer()} • {domain}")
     return embed
 
 
 def make_new_item_embed(store_name: str, store_url: str, variants: list) -> discord.Embed:
+    from urllib.parse import urlparse
     first     = variants[0]
     price     = f"${float(first['price']):.2f}"
-    domain    = _display_domain(store_url.split("/")[2])
+    domain    = _display_domain(urlparse(store_url).netloc)
     in_stock  = [v["variant_title"] for v in variants if v["available"] and v["variant_title"].lower() != "default title"]
     out_stock = [v["variant_title"] for v in variants if not v["available"] and v["variant_title"].lower() != "default title"]
-    has_variants = bool(in_stock or out_stock)
     size_lines = ""
     if in_stock:
         size_lines += "✅ " + ", ".join(in_stock)
     if out_stock:
         size_lines += ("\n" if size_lines else "") + "❌ " + ", ".join(out_stock)
+    product_url = _product_url(store_url, first["handle"])
     embed = discord.Embed(
         title=f"🆕 New Item: {first['title']}",
         color=0xFEE75C,
@@ -1026,7 +1035,13 @@ def make_new_item_embed(store_name: str, store_url: str, variants: list) -> disc
     embed.add_field(name="Variants", value=size_lines or "N/A", inline=True)
     embed.add_field(name="Price", value=price,             inline=True)
     embed.add_field(name="Store", value=store_name,        inline=True)
-    embed.add_field(name="Link",  value=_product_url(store_url, first["handle"]), inline=False)
+    available_v = [v for v in variants if v.get("available") and v.get("variant_id")]
+    link_parts = [f"[View Product]({product_url})"]
+    for v in available_v[:20]:
+        label = v.get("variant_title", "")
+        label = "Add to Cart" if not label or label.lower() == "default title" else label
+        link_parts.append(f"[{label}](https://{domain}/cart/{v['variant_id']}:1)")
+    embed.add_field(name="Links", value="  ".join(link_parts), inline=False)
     embed.set_footer(text=f"{bot_footer()} • {domain}")
     return embed
 
@@ -2099,7 +2114,7 @@ class RestockCog(commands.Cog):
         unavailable = [v for v in variants if not v.get("available")]
         price       = f"${float(variants[0]['price']):.2f}" if variants else "N/A"
         store_url   = stores[store_name]
-        base        = store_url.split("?")[0].rstrip("/products.json").rstrip("/")
+        base        = store_url.split("?")[0].removesuffix("/products.json").rstrip("/")
         product_url = f"{base}/products/{latest.get('handle', '')}"
         updated_raw = latest.get("updated_at", "")
 

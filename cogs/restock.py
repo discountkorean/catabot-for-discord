@@ -2237,8 +2237,9 @@ class RestockCog(commands.Cog):
         unavailable = [v for v in variants if not v.get("available")]
         price       = f"${float(variants[0]['price']):.2f}" if variants else "N/A"
         store_url   = stores[store_name]
-        base        = store_url.split("?")[0].rstrip("/products.json").rstrip("/")
-        product_url = f"{base}/products/{latest.get('handle', '')}"
+        from urllib.parse import urlparse as _urlparse
+        _p          = _urlparse(store_url)
+        product_url = f"{_p.scheme}://{_display_domain(_p.netloc)}/products/{latest.get('handle', '')}"
         updated_raw = latest.get("updated_at", "")
 
         embed = discord.Embed(

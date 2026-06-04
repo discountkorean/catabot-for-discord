@@ -419,10 +419,11 @@ class ATCView(discord.ui.View):
         base    = f"{p.scheme}://{p.netloc}"
         domain  = _display_domain(p.netloc)
         available = [v for v in variants if v.get("available") and v.get("variant_id")]
+        single    = len(available) == 1
         for v in available[:20]:
             label = v.get("variant_title", "")
-            if not label or label.lower() == "default title":
-                label = "Buy Now"
+            if single or not label or label.lower() == "default title":
+                label = "Add to Cart"
             self.add_item(discord.ui.Button(
                 label=label[:80],
                 url=f"https://{domain}/cart/{v['variant_id']}:1",
@@ -945,12 +946,10 @@ def _format_sizes(variant_titles: list[str]) -> tuple[str, str]:
 
 
 def _product_url(store_url: str, handle: str) -> str:
-    base   = store_url.split("?")[0].rstrip("/products.json").rstrip("/")
-    scheme, _, domain_path = base.partition("://")
-    parts  = domain_path.split("/", 1)
-    domain = _display_domain(parts[0])
-    path   = "/" + parts[1] if len(parts) > 1 else ""
-    return f"{scheme}://{domain}{path}/products/{handle}"
+    from urllib.parse import urlparse
+    p      = urlparse(store_url)
+    domain = _display_domain(p.netloc)
+    return f"{p.scheme}://{domain}/products/{handle}"
 
 
 AGGREGATE_THRESHOLD = 20
@@ -1030,7 +1029,7 @@ def make_restock_embed(store_name: str, store_url: str, variants: list) -> disco
     embed.add_field(name="Price", value=price,             inline=True)
     embed.add_field(name="Store", value=store_name,        inline=True)
     embed.add_field(name="Stock", value="✅ In Stock",     inline=True)
-    embed.add_field(name="Link",  value=_product_url(store_url, first["handle"]), inline=False)
+    embed.add_field(name="View Product", value=_product_url(store_url, first["handle"]), inline=False)
     embed.set_footer(text=f"{bot_footer()} • {domain}")
     return embed
 
@@ -1057,7 +1056,7 @@ def make_new_item_embed(store_name: str, store_url: str, variants: list) -> disc
     embed.add_field(name="Variants", value=size_lines or "N/A", inline=True)
     embed.add_field(name="Price", value=price,             inline=True)
     embed.add_field(name="Store", value=store_name,        inline=True)
-    embed.add_field(name="Link",  value=_product_url(store_url, first["handle"]), inline=False)
+    embed.add_field(name="View Product", value=_product_url(store_url, first["handle"]), inline=False)
     embed.set_footer(text=f"{bot_footer()} • {domain}")
     return embed
 
@@ -1119,7 +1118,7 @@ def make_price_change_embed(store_name: str, store_url: str, variants: list) -> 
             lines.append(f"**{label}**: {old_p} → **{new_p}**")
     embed.add_field(name="Price", value="\n".join(lines), inline=False)
     embed.add_field(name="Store", value=store_name, inline=True)
-    embed.add_field(name="Link",  value=_product_url(store_url, first["handle"]), inline=False)
+    embed.add_field(name="View Product", value=_product_url(store_url, first["handle"]), inline=False)
     embed.set_footer(text=f"{bot_footer()} • {domain}")
     return embed
 
@@ -1479,18 +1478,22 @@ class RestockCog(commands.Cog):
                         for variants in restocked.values():
                             if not _alert_enabled("restock", variants):
                                 continue
+                            atc = ATCView(url, variants)
                             await channel.send(
                                 content=_ping_for(variants),
                                 embed=make_restock_embed(store_name, url, variants),
+                                view=atc if atc.has_buttons else None,
                             )
                             log.info(f"RESTOCK: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
                         for variants in new_items.values():
                             if not _alert_enabled("new_item", variants):
                                 continue
+                            atc = ATCView(url, variants)
                             await channel.send(
                                 content=_ping_for(variants),
                                 embed=make_new_item_embed(store_name, url, variants),
+                                view=atc if atc.has_buttons else None,
                             )
                             log.info(f"NEW ITEM: {variants[0]['title']} @ {store_name} → guild {guild_id_str}")
 
@@ -1518,9 +1521,11 @@ class RestockCog(commands.Cog):
                                 continue
                             if not _alert_enabled("price_change", qualifying):
                                 continue
+                            atc = ATCView(url, qualifying)
                             await channel.send(
                                 content=_ping_for(qualifying),
                                 embed=make_price_change_embed(store_name, url, qualifying),
+                                view=atc if atc.has_buttons else None,
                             )
                             log.info(f"PRICE CHANGE: {qualifying[0]['title']} @ {store_name} → guild {guild_id_str}")
 

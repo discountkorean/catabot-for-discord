@@ -122,7 +122,8 @@ class SearchPaginator(discord.ui.View):
 class WatchSizePicker(discord.ui.View):
     """Size-picker UI for watching a product. Shows all variants as toggle buttons."""
 
-    def __init__(self, cog, guild_id: int, store_name: str, store_url: str, product: dict):
+    def __init__(self, cog, guild_id: int, store_name: str, store_url: str, product: dict,
+                 preselect: set[str] | None = None):
         super().__init__(timeout=120)
         self.cog        = cog
         self.guild_id   = guild_id
@@ -136,7 +137,7 @@ class WatchSizePicker(discord.ui.View):
         self.image_url     = (product.get("images") or [{}])[0].get("src")
 
         self.variants: list[dict] = product.get("variants", [])
-        self.selected: set[str]   = set()
+        self.selected: set[str]   = set(preselect or [])
 
         # Add one button per variant (up to 20 to leave room for Confirm/Cancel row)
         for v in self.variants[:20]:
@@ -145,14 +146,14 @@ class WatchSizePicker(discord.ui.View):
             label     = f"{v.get('title', vid)} {'✅' if avail else '🔴'}"
             btn       = discord.ui.Button(
                 label=label,
-                style=discord.ButtonStyle.secondary,
+                style=discord.ButtonStyle.primary if vid in self.selected else discord.ButtonStyle.secondary,
                 custom_id=f"watch_size_{vid}",
             )
             btn.callback = self._make_toggle(vid)
             self.add_item(btn)
 
         self.confirm_btn = discord.ui.Button(
-            label="Confirm", style=discord.ButtonStyle.success, disabled=True, row=4
+            label="Confirm", style=discord.ButtonStyle.success, disabled=len(self.selected) == 0, row=4
         )
         self.confirm_btn.callback = self._confirm
         self.add_item(self.confirm_btn)
@@ -282,6 +283,38 @@ class WatchProductSelect(discord.ui.View):
         product = self.products[handle]
         picker  = WatchSizePicker(self.cog, self.guild_id, self.store_name, self.store_url, product)
         await interaction.response.edit_message(embed=picker.build_embed(), view=picker)
+
+
+class WatchOnSoldOutView(discord.ui.View):
+    """Watch button attached to a sold-out alert embed."""
+
+    def __init__(self, cog, guild_id: int, store_name: str, store_url: str,
+                 handle: str, sold_out_variant_ids: list[str]):
+        super().__init__(timeout=None)
+        self.cog                  = cog
+        self.guild_id             = guild_id
+        self.store_name           = store_name
+        self.store_url            = store_url
+        self.handle               = handle
+        self.sold_out_variant_ids = sold_out_variant_ids
+
+    @discord.ui.button(label="👀 Watch", style=discord.ButtonStyle.primary)
+    async def watch_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        base = _base_url(self.store_url)
+        try:
+            def _fetch():
+                with _HTTP.get(f"{base}/products/{self.handle}.js", timeout=10) as resp:
+                    return _normalize_product_js(resp.json())
+            product = await asyncio.to_thread(_fetch)
+        except Exception:
+            await interaction.followup.send("Could not fetch product details. Please try again.", ephemeral=True)
+            return
+        picker = WatchSizePicker(
+            self.cog, self.guild_id, self.store_name, self.store_url, product,
+            preselect=set(str(v) for v in self.sold_out_variant_ids),
+        )
+        await interaction.followup.send(embed=picker.build_embed(), view=picker, ephemeral=True)
 
 
 CATALOG_PAGE_SIZE = 15
@@ -1078,20 +1111,21 @@ def make_removed_embed(store_name: str, store_url: str, variants: list) -> disco
     return embed
 
 
-def make_sold_out_embed(store_name: str, store_url: str, sold_out: dict) -> discord.Embed:
-    """sold_out: handle → list of variant dicts (same shape as the sold_out dict from the poll loop)."""
+def make_sold_out_embed(store_name: str, store_url: str, variants: list) -> discord.Embed:
+    """variants: list of variant dicts for a single product that just sold out."""
+    first  = variants[0]
     domain = _display_domain(store_url.split("/")[2])
+    _, sizes = _format_sizes([v["variant_title"] for v in variants])
     embed  = discord.Embed(
-        title=f"🔴 Sold Out — {store_name}",
+        title=f"🔴 Sold Out: {first['title']}",
         color=0xED4245,
         timestamp=datetime.now(ZoneInfo("UTC")),
     )
-    lines = []
-    for variants in sold_out.values():
-        title = variants[0]["title"]
-        _, sizes = _format_sizes([v["variant_title"] for v in variants])
-        lines.append(f"**{title}** ({sizes})")
-    embed.description = "\n".join(lines)
+    if first.get("image_url"):
+        embed.set_thumbnail(url=first["image_url"])
+    embed.add_field(name="Sizes",  value=sizes,      inline=True)
+    embed.add_field(name="Store",  value=store_name, inline=True)
+    embed.add_field(name="View Product", value=_product_url(store_url, first["handle"]), inline=False)
     embed.set_footer(text=f"{bot_footer()} • {domain}")
     return embed
 
@@ -1398,7 +1432,7 @@ class RestockCog(commands.Cog):
                     if not previous[vid].get("available", True) and info["available"]:
                         restocked.setdefault(handle, []).append({**info, "variant_id": vid})
                     elif previous[vid].get("available", True) and not info["available"]:
-                        sold_out.setdefault(handle, []).append(info)
+                        sold_out.setdefault(handle, []).append({**info, "variant_id": vid})
 
             # Detect fully removed products (variants in previous but not in current)
             for vid, info in previous.items():
@@ -1500,7 +1534,16 @@ class RestockCog(commands.Cog):
                     if sold_out:
                         all_sold = [v for vlist in sold_out.values() for v in vlist]
                         if _alert_enabled("sold_out", all_sold):
-                            await channel.send(embed=make_sold_out_embed(store_name, url, sold_out))
+                            for variants in sold_out.values():
+                                sold_ids = [str(v.get("variant_id", "")) for v in variants if v.get("variant_id")]
+                                watch_view = WatchOnSoldOutView(
+                                    self, int(guild_id_str), store_name, url,
+                                    variants[0]["handle"], sold_ids,
+                                )
+                                await channel.send(
+                                    embed=make_sold_out_embed(store_name, url, variants),
+                                    view=watch_view,
+                                )
                             log.info(f"SOLD OUT: {len(sold_out)} product(s) @ {store_name} → guild {guild_id_str}")
 
                     for variants in removed.values():

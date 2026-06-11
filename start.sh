@@ -10,7 +10,7 @@ else
 fi
 
 echo "Installing dependencies..."
-python3 -m pip install -q -r "$DIR/requirements.txt"
+python3 -m pip install -q --break-system-packages -r "$DIR/requirements.txt"
 
 echo "Starting bot..."
 bash "$DIR/scripts/bot.sh" start

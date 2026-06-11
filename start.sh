@@ -4,7 +4,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Pulling latest data..."
 if [ -d "$DIR/data/.git" ]; then
-    git -C "$DIR/data" pull --ff-only && echo "Data up to date." || echo "Warning: data pull failed, starting with local data."
+    git -C "$DIR/data" pull --ff-only && echo "Data up to date." || true
 else
     echo "Warning: data/ is not a git repo — skipping pull."
 fi

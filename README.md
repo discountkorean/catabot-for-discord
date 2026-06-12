@@ -62,6 +62,51 @@ scripts\apply-tcp-tuning.ps1
 
 Reboot after running. Sets `TcpTimedWaitDelay=30s` and expands the ephemeral port range.
 
+## Linux deployment (Ubuntu Server / Hyper-V)
+
+Shell-script equivalents of every `.bat`/`.ps1` live alongside them (`start.sh`, `stop.sh`,
+`restart.sh`, `scripts/watchdog.sh`, `scripts/sync-data.sh`, `scripts/apply-sysctl-tuning.sh`).
+
+First-time setup:
+
+```bash
+chmod +x start.sh stop.sh restart.sh scripts/*.sh
+python3 -m pip install --break-system-packages -r requirements.txt
+```
+
+### Auto-start on boot (systemd)
+
+Install the bot as a systemd service so it starts on boot (after the network is up) and
+auto-restarts the watchdog if it ever dies:
+
+```bash
+sudo bash scripts/install-service.sh
+```
+
+This generates `/etc/systemd/system/catabot.service` from the current path, enables it,
+and removes the old `@reboot` crontab entry so the bot can't start twice. Manage it with:
+
+```bash
+systemctl status catabot      # check state
+systemctl restart catabot     # manual restart
+journalctl -u catabot -f      # follow service logs
+```
+
+> When running under systemd, control the bot with `systemctl`, not `stop.sh` —
+> `systemctl` owns the lifecycle and will restart the watchdog if it exits.
+
+### Surviving a Hyper-V host reboot
+
+The systemd service handles the VM booting, but the **VM itself** must be told to power on
+when the Hyper-V host starts. Run once on the **host** (PowerShell, as Administrator):
+
+```powershell
+Set-VM -Name "<your-vm-name>" -AutomaticStartAction Start -AutomaticStartDelay 30
+```
+
+`Start` always powers the VM on at host boot; the 30s delay staggers startup so the host
+finishes initialising first. (Use `Get-VM` to list VM names.)
+
 ## Commands
 
 ### Help

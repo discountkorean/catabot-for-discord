@@ -7,6 +7,7 @@ avoid a circular import with :mod:`catabot.cog`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from datetime import datetime
 from typing import Any
@@ -430,10 +431,8 @@ class AlertToggleView(discord.ui.View):
             alerts[key] = not alerts.get(key, defaults.get(key, False))
             self.cog.persist(self.guild_id)
             self._rebuild()
-            try:
+            with contextlib.suppress(Exception):
                 await interaction.response.edit_message(view=self)
-            except Exception:  # noqa: BLE001
-                pass
 
         return callback
 

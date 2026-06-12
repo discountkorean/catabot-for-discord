@@ -263,7 +263,6 @@ class RestockCog(commands.Cog):
             self.poll.change_interval(seconds=min_iv)
 
         now = datetime.now(ZoneInfo("UTC")).timestamp()
-        all_stores = self._all_stores()
 
         # Determine which guilds are due for a poll this cycle
         due_guilds = {
@@ -352,11 +351,10 @@ class RestockCog(commands.Cog):
                 handle = info["handle"]
                 if vid not in previous:
                     new_items.setdefault(handle, []).append({**info, "variant_id": vid})
-                else:
-                    if not previous[vid].get("available", True) and info["available"]:
-                        restocked.setdefault(handle, []).append({**info, "variant_id": vid})
-                    elif previous[vid].get("available", True) and not info["available"]:
-                        sold_out.setdefault(handle, []).append({**info, "variant_id": vid})
+                elif not previous[vid].get("available", True) and info["available"]:
+                    restocked.setdefault(handle, []).append({**info, "variant_id": vid})
+                elif previous[vid].get("available", True) and not info["available"]:
+                    sold_out.setdefault(handle, []).append({**info, "variant_id": vid})
 
             # Detect fully removed products (variants in previous but not in current)
             for vid, info in previous.items():
@@ -400,7 +398,9 @@ class RestockCog(commands.Cog):
                 if store_name not in gs.get("stores", {}):
                     continue
 
-                def _ping_for(variants_list: list) -> str | None:
+                # gs/store_name/alerts bound as defaults: these closures are used
+                # only within this loop iteration, but binding avoids B023.
+                def _ping_for(variants_list: list, gs=gs, store_name=store_name) -> str | None:
                     user_ids, role_ids = set(), set()
                     for sub in gs.get("subscriptions", []):
                         if sub.get("type") not in ("user", "role"):
@@ -414,7 +414,7 @@ class RestockCog(commands.Cog):
 
                 alerts = gs.get("store_alerts", {}).get(store_name, _default_store_alerts())
 
-                def _alert_enabled(key: str, variants_list: list) -> bool:
+                def _alert_enabled(key: str, variants_list: list, gs=gs, store_name=store_name, alerts=alerts) -> bool:
                     """True if the alert type is toggled on, OR any subscription matches these variants."""
                     if alerts.get(key, _default_store_alerts().get(key, False)):
                         return True
@@ -827,7 +827,6 @@ class RestockCog(commands.Cog):
         await interaction.response.defer()
         gs = self._guild(interaction.guild_id)
         target = user or interaction.user
-        stores = self._guild_stores(interaction.guild_id)
 
         subs = [
             s for s in gs.get("subscriptions", []) if s["type"] in ("user", "watch") and s["target_id"] == target.id

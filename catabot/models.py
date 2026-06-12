@@ -15,14 +15,33 @@ from .shopify import display_domain
 # Canonical size tokens. Keys are pre-normalized (lowercased, stripped of
 # spaces/dashes/underscores); values are the canonical form used for matching.
 _SIZE_ALIASES: dict[str, str] = {
-    "xs": "xs", "xsmall": "xs", "xsm": "xs", "extrasmall": "xs",
-    "s": "s", "small": "s", "sm": "s",
-    "m": "m", "med": "m", "medium": "m",
-    "l": "l", "large": "l", "lg": "l",
-    "xl": "xl", "xlarge": "xl", "extralarge": "xl",
-    "2xl": "2xl", "xxl": "2xl", "xxlarge": "2xl", "2xlarge": "2xl", "doublexl": "2xl",
-    "3xl": "3xl", "xxxl": "3xl", "3xlarge": "3xl", "triplexl": "3xl",
-    "4xl": "4xl", "xxxxl": "4xl",
+    "xs": "xs",
+    "xsmall": "xs",
+    "xsm": "xs",
+    "extrasmall": "xs",
+    "s": "s",
+    "small": "s",
+    "sm": "s",
+    "m": "m",
+    "med": "m",
+    "medium": "m",
+    "l": "l",
+    "large": "l",
+    "lg": "l",
+    "xl": "xl",
+    "xlarge": "xl",
+    "extralarge": "xl",
+    "2xl": "2xl",
+    "xxl": "2xl",
+    "xxlarge": "2xl",
+    "2xlarge": "2xl",
+    "doublexl": "2xl",
+    "3xl": "3xl",
+    "xxxl": "3xl",
+    "3xlarge": "3xl",
+    "triplexl": "3xl",
+    "4xl": "4xl",
+    "xxxxl": "4xl",
     "5xl": "5xl",
 }
 
@@ -72,14 +91,30 @@ def migrate_notifications(gs: dict) -> bool:
             notifs = {"users": notifs, "roles": []}
         for uid in notifs.get("users", []):
             if ("user", uid) not in existing_ids:
-                subs.append({"id": uuid.uuid4().hex[:8], "type": "user", "target_id": uid,
-                             "stores": [store_name], "names": [], "sizes": []})
+                subs.append(
+                    {
+                        "id": uuid.uuid4().hex[:8],
+                        "type": "user",
+                        "target_id": uid,
+                        "stores": [store_name],
+                        "names": [],
+                        "sizes": [],
+                    }
+                )
                 existing_ids.add(("user", uid))
                 changed = True
         for rid in notifs.get("roles", []):
             if ("role", rid) not in existing_ids:
-                subs.append({"id": uuid.uuid4().hex[:8], "type": "role", "target_id": rid,
-                             "stores": [store_name], "names": [], "sizes": []})
+                subs.append(
+                    {
+                        "id": uuid.uuid4().hex[:8],
+                        "type": "role",
+                        "target_id": rid,
+                        "stores": [store_name],
+                        "names": [],
+                        "sizes": [],
+                    }
+                )
                 existing_ids.add(("role", rid))
                 changed = True
     if changed:

@@ -33,8 +33,16 @@ class TestSizeList:
 
 class TestRestockEmbed:
     def test_builds_embed_with_title_and_price(self):
-        variants = [{"title": "Logo Tee", "variant_title": "S", "price": "40.00",
-                     "handle": "logo-tee", "image_url": None, "available": True}]
+        variants = [
+            {
+                "title": "Logo Tee",
+                "variant_title": "S",
+                "price": "40.00",
+                "handle": "logo-tee",
+                "image_url": None,
+                "available": True,
+            }
+        ]
         embed = make_restock_embed("StoreA", "https://www.store.com/x", variants)
         assert isinstance(embed, discord.Embed)
         assert "Back in Stock: Logo Tee" in embed.title

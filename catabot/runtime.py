@@ -72,9 +72,7 @@ def setup_logging() -> logging.Logger:
     root.handlers.clear()
     root.addHandler(queue_handler)
 
-    _log_listener = logging.handlers.QueueListener(
-        log_queue, file_handler, stream_handler, respect_handler_level=True
-    )
+    _log_listener = logging.handlers.QueueListener(log_queue, file_handler, stream_handler, respect_handler_level=True)
     _log_listener.start()
 
     return logging.getLogger("catabot")

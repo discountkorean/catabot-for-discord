@@ -107,7 +107,9 @@ def make_restock_embed(store_name: str, store_url: str, variants: list) -> disco
 def make_new_item_embed(store_name: str, store_url: str, variants: list) -> discord.Embed:
     first = variants[0]
     domain = display_domain(store_url.split("/")[2])
-    in_stock = [v["variant_title"] for v in variants if v["available"] and v["variant_title"].lower() != "default title"]
+    in_stock = [
+        v["variant_title"] for v in variants if v["available"] and v["variant_title"].lower() != "default title"
+    ]
     out_stock = [
         v["variant_title"] for v in variants if not v["available"] and v["variant_title"].lower() != "default title"
     ]

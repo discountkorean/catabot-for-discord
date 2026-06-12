@@ -104,6 +104,7 @@ class SearchPaginator(discord.ui.View):
         base = shopify.base_url(store_url)
         await interaction.response.defer(ephemeral=True)
         try:
+
             def _fetch_product():
                 resp = shopify.SESSION.get(f"{base}/products/{r.handle}.js", timeout=10)
                 return shopify.normalize_product_js(resp.json())
@@ -119,8 +120,9 @@ class SearchPaginator(discord.ui.View):
 class WatchSizePicker(discord.ui.View):
     """Size-picker UI for watching a product. Shows all variants as toggles."""
 
-    def __init__(self, cog: Any, guild_id: int, store_name: str, store_url: str, product: dict,
-                 preselect: set[str] | None = None):
+    def __init__(
+        self, cog: Any, guild_id: int, store_name: str, store_url: str, product: dict, preselect: set[str] | None = None
+    ):
         super().__init__(timeout=120)
         self.cog = cog
         self.guild_id = guild_id
@@ -166,9 +168,7 @@ class WatchSizePicker(discord.ui.View):
                 self.selected.add(vid)
             for item in self.children:
                 if isinstance(item, discord.ui.Button) and item.custom_id == f"watch_size_{vid}":
-                    item.style = (
-                        discord.ButtonStyle.primary if vid in self.selected else discord.ButtonStyle.secondary
-                    )
+                    item.style = discord.ButtonStyle.primary if vid in self.selected else discord.ButtonStyle.secondary
             self.confirm_btn.disabled = len(self.selected) == 0
             await interaction.response.edit_message(view=self)
 
@@ -295,8 +295,9 @@ class WatchProductSelect(discord.ui.View):
 class WatchOnSoldOutView(discord.ui.View):
     """Persistent Watch button attached to a sold-out alert embed."""
 
-    def __init__(self, cog: Any, guild_id: int, store_name: str, store_url: str,
-                 handle: str, sold_out_variant_ids: list[str]):
+    def __init__(
+        self, cog: Any, guild_id: int, store_name: str, store_url: str, handle: str, sold_out_variant_ids: list[str]
+    ):
         super().__init__(timeout=None)
         self.cog = cog
         self.guild_id = guild_id
@@ -310,6 +311,7 @@ class WatchOnSoldOutView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         base = shopify.base_url(self.store_url)
         try:
+
             def _fetch():
                 resp = shopify.SESSION.get(f"{base}/products/{self.handle}.js", timeout=10)
                 return shopify.normalize_product_js(resp.json())
@@ -319,7 +321,11 @@ class WatchOnSoldOutView(discord.ui.View):
             await interaction.followup.send("Could not fetch product details. Please try again.", ephemeral=True)
             return
         picker = WatchSizePicker(
-            self.cog, self.guild_id, self.store_name, self.store_url, product,
+            self.cog,
+            self.guild_id,
+            self.store_name,
+            self.store_url,
+            product,
             preselect={str(v) for v in self.sold_out_variant_ids},
         )
         await interaction.followup.send(embed=picker.build_embed(), view=picker, ephemeral=True)

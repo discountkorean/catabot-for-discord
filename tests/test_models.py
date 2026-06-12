@@ -81,8 +81,10 @@ class TestMigrateNotifications:
         }
 
     def test_idempotent_dedup(self):
-        gs = {"subscriptions": [{"type": "user", "target_id": 1, "stores": [], "names": [], "sizes": []}],
-              "notifications": {"StoreA": {"users": [1], "roles": []}}}
+        gs = {
+            "subscriptions": [{"type": "user", "target_id": 1, "stores": [], "names": [], "sizes": []}],
+            "notifications": {"StoreA": {"users": [1], "roles": []}},
+        }
         migrate_notifications(gs)
         users = [s for s in gs["subscriptions"] if s["target_id"] == 1]
         assert len(users) == 1

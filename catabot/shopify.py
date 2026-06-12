@@ -214,9 +214,7 @@ def search_suggest_sync(base: str, query: str, limit: int = 10) -> list:
         if not r.ok:
             return []
         handles = [
-            p["handle"]
-            for p in r.json().get("resources", {}).get("results", {}).get("products", [])
-            if p.get("handle")
+            p["handle"] for p in r.json().get("resources", {}).get("results", {}).get("products", []) if p.get("handle")
         ]
     except Exception as e:  # noqa: BLE001
         log.error(f"suggest failed for {base}: {e}")

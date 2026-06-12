@@ -27,8 +27,7 @@ class TestNextLink:
 
     def test_prefers_next_over_previous(self):
         header = (
-            '<https://store.com/p?page_info=prev>; rel="previous", '
-            '<https://store.com/p?page_info=next>; rel="next"'
+            '<https://store.com/p?page_info=prev>; rel="previous", <https://store.com/p?page_info=next>; rel="next"'
         )
         assert _next_link(header) == "https://store.com/p?page_info=next"
 

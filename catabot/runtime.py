@@ -28,7 +28,6 @@ PID_FILE = os.path.join(DATA_DIR, "bot.pid")
 
 STATE_FILE = os.path.join(DATA_DIR, "stock_state.json")
 BOT_STATE_FILE = os.path.join(DATA_DIR, "bot_state.json")
-PRODUCTS_CACHE_FILE = os.path.join(DATA_DIR, "products_cache.json")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)

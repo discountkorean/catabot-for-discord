@@ -238,12 +238,11 @@ async def scheduled_restart():
     now = datetime.now(AEST)
     if now.hour in RESTART_HOURS_AEST and now.minute == 0:
         log.info(f"Scheduled restart at {now.strftime('%H:%M')} AEST")
-        from .storage import save_products_cache, save_state
+        from .storage import save_state
 
         cog = bot.cogs.get("RestockCog")
         if cog:
             save_state(cog.state)
-            save_products_cache(cog.products_cache)
         _respawn_and_exit()
 
 

@@ -55,11 +55,9 @@ from .storage import (
     bot_footer,
     load_all_guilds,
     load_bot_state,
-    load_products_cache,
     load_state,
     save_bot_state,
     save_guild_state,
-    save_products_cache,
     save_state,
 )
 from .views import (
@@ -101,7 +99,6 @@ class RestockCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.state = load_state()
-        self.products_cache = load_products_cache()
         raw = load_bot_state()
         self.guilds: dict = load_all_guilds()
         self._last_polled: dict = {}  # guild_id_str → last poll timestamp
@@ -303,7 +300,6 @@ class RestockCog(commands.Cog):
             if not products:
                 continue
 
-            self.products_cache[url] = products
             current = build_variant_map(products)
 
             # Fetch watched handles not already in current
@@ -510,10 +506,7 @@ class RestockCog(commands.Cog):
                 except Exception as e:
                     log.error(f"Failed to send alert for {store_name} → guild {guild_id_str}: {e}")
 
-        await asyncio.gather(
-            asyncio.to_thread(save_state, self.state),
-            asyncio.to_thread(save_products_cache, self.products_cache),
-        )
+        await asyncio.to_thread(save_state, self.state)
 
         # Stamp last polled time for all due guilds
         for gid in due_guilds:

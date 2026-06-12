@@ -4,7 +4,6 @@ Layout under ``data/``::
 
     config.toml            # static config (version, defaults)         [read-only]
     stock_state.json       # last-seen variant map, keyed by store URL
-    products_cache.json    # last full product list, keyed by store URL
     bot_state.json         # misc cross-restart flags (restart message, etc.)
     <guild_id>/state.json  # per-guild stores, channels, subscriptions
 
@@ -25,7 +24,6 @@ from .runtime import (
     BOT_STATE_FILE,
     CONFIG_FILE,
     DATA_DIR,
-    PRODUCTS_CACHE_FILE,
     STATE_FILE,
 )
 
@@ -74,15 +72,6 @@ def load_state() -> dict[str, Any]:
 
 def save_state(state: dict[str, Any]) -> None:
     _save_json(STATE_FILE, state)
-
-
-def load_products_cache() -> dict[str, Any]:
-    """Last full product list per store, used by catalog/search without refetch."""
-    return _load_json(PRODUCTS_CACHE_FILE, {})
-
-
-def save_products_cache(cache: dict[str, Any]) -> None:
-    _save_json(PRODUCTS_CACHE_FILE, cache)
 
 
 def load_bot_state() -> dict[str, Any]:

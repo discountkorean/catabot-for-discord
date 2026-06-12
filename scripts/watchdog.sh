@@ -4,8 +4,10 @@ BOT_FILE="$DIR/bot.py"
 PID_FILE="$DIR/data/bot.pid"
 STOP_FILE="$DIR/data/bot.stop"
 
-# Scheduled restart hours (24h)
-RESTART_HOURS=(4 16)
+# Scheduled restarts are owned by the bot itself (catabot.app.scheduled_restart,
+# at 00/08/16 AEST) so it can save state cleanly before exiting. The watchdog
+# only supervises and crash-restarts. Leave empty to disable watchdog-side flushes.
+RESTART_HOURS=()
 
 CRASH_DELAY=10       # seconds to wait after an unexpected crash
 SOCKET_BACKOFF=60    # extra wait when bot dies in <30s (likely socket exhaustion)
@@ -31,7 +33,7 @@ rm -f "$STOP_FILE"
 echo "=== Catabot Watchdog ==="
 echo "Python          : $PYTHON"
 echo "Bot             : $BOT_FILE"
-echo "Scheduled flush : ${RESTART_HOURS[*]} (hours, daily)"
+echo "Scheduled flush : ${RESTART_HOURS[*]:-none (bot self-restarts at 00/08/16 AEST)}"
 echo "Run 'touch $STOP_FILE' or bash stop.sh to shut down."
 echo ""
 

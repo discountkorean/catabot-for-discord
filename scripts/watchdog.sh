@@ -45,7 +45,9 @@ while true; do
     echo "[$(date '+%H:%M:%S')] Starting bot..."
     START_TIME=$(date +%s)
 
-    "$PYTHON" "$BOT_FILE" >> "$DIR/logs/monitor.log" 2>&1 &
+    # console.log, NOT monitor.log — the bot's own file handler already writes
+    # monitor.log; redirecting stdout there too duplicates every line.
+    CATABOT_SUPERVISED=1 "$PYTHON" "$BOT_FILE" >> "$DIR/logs/console.log" 2>&1 &
     BOT_PID=$!
     echo $BOT_PID > "$PID_FILE"
     echo "[$(date '+%H:%M:%S')] Bot running (PID $BOT_PID)"

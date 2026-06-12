@@ -196,6 +196,19 @@ async def cmd_help(interaction: discord.Interaction):
 
 RESTART_HOURS_AEST = {0, 8, 16}  # 12 AM, 8 AM, 4 PM AEST
 
+# When supervised (watchdog sets CATABOT_SUPERVISED=1), exit and let the
+# watchdog respawn us. Self-spawning under a supervisor leaks an extra bot
+# process per restart — both the child and the watchdog's replacement live on.
+SUPERVISED = os.environ.get("CATABOT_SUPERVISED") == "1"
+
+
+def _respawn_and_exit():
+    if not SUPERVISED:
+        args = [sys.executable] + [a for a in sys.argv if a != "--restarted"] + ["--restarted"]
+        subprocess.Popen(args, cwd=BASE_DIR)
+    os._exit(0)
+
+
 @tasks.loop(minutes=1)
 async def scheduled_restart():
     now = datetime.now(AEST)
@@ -206,9 +219,7 @@ async def scheduled_restart():
         if cog:
             save_state(cog.state)
             save_products_cache(cog.products_cache)
-        args = [sys.executable] + [a for a in sys.argv if a != "--restarted"] + ["--restarted"]
-        subprocess.Popen(args, cwd=BASE_DIR)
-        os._exit(0)
+        _respawn_and_exit()
 
 
 @bot.tree.command(name="restart", description="Restart the bot process")
@@ -225,9 +236,7 @@ async def cmd_restart(interaction: discord.Interaction):
     save_bot_state(state)
 
     async def _do_restart():
-        args = [sys.executable] + [a for a in sys.argv if a != "--restarted"] + ["--restarted"]
-        subprocess.Popen(args, cwd=BASE_DIR)
-        os._exit(0)
+        _respawn_and_exit()
 
     asyncio.create_task(_do_restart())
 

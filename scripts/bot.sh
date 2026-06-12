@@ -34,7 +34,7 @@ stop_bot() {
 start_bot() {
     PYTHON=$(find_python)
     mkdir -p "$DIR/data" "$DIR/logs"
-    nohup "$PYTHON" "$BOT_FILE" >> "$DIR/logs/monitor.log" 2>&1 &
+    nohup "$PYTHON" "$BOT_FILE" >> "$DIR/logs/console.log" 2>&1 &
     echo $! > "$PID_FILE"
     echo "Bot started (PID $(cat "$PID_FILE"))."
 }

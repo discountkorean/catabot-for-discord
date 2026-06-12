@@ -138,10 +138,9 @@ class RestockCog(commands.Cog):
             sa = gs["store_alerts"].setdefault(store_name, _default_store_alerts())
             sa.setdefault("price_change", False)
         # Migrate old notifications dict → subscriptions list
-        if "notifications" in gs:
-            if _migrate_notifications(gs):
-                save_guild_state(key, gs)
-                log.info(f"Migrated notifications → subscriptions for guild {key}")
+        if "notifications" in gs and _migrate_notifications(gs):
+            save_guild_state(key, gs)
+            log.info(f"Migrated notifications → subscriptions for guild {key}")
         return gs
 
     def _guild_stores(self, guild_id: int) -> dict:

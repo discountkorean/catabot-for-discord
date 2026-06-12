@@ -25,7 +25,7 @@ from curl_cffi.requests import exceptions as requests_exceptions
 
 log = logging.getLogger(__name__)
 
-SESSION = requests.Session(impersonate="chrome")
+SESSION: requests.Session = requests.Session(impersonate="chrome")
 
 # Shopify paginates products.json at most 250 per page.
 PAGE_LIMIT = 250

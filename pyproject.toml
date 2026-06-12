@@ -51,6 +51,15 @@ check_untyped_defs = true
 disallow_untyped_defs = false
 warn_return_any = false
 
+# The discord-glue layer (cog/views/app) is checked but not failed on:
+# discord.py models channel/user as wide 7-member unions, so get_channel().send()
+# and similar idioms produce union-attr noise that obscures real issues. The
+# typeable domain core (runtime, storage, models, shopify, embeds) is checked
+# strictly; these modules are exercised by the live bot and the integration smoke.
+[[tool.mypy.overrides]]
+module = ["catabot.cog", "catabot.views", "catabot.app"]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

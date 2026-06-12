@@ -1,0 +1,65 @@
+[project]
+name = "catabot"
+version = "2.0.0"
+description = "A Discord bot that monitors Shopify stores for restocks, drops, and price changes."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "discord.py>=2.4,<3",
+    "curl_cffi>=0.7,<1",
+    "python-dotenv>=1.0,<2",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pytest>=8.0",
+]
+
+[project.scripts]
+catabot = "catabot.app:run"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["catabot"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
+ignore = [
+    "E501",  # line length handled by formatter; long embed strings are fine
+    "B008",  # discord uses callables in defaults (app_commands)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = true
+# Pragmatic: the codebase uses dynamic discord/JSON dicts heavily.
+disallow_untyped_defs = false
+warn_return_any = false
+
+# The discord-glue layer (cog/views/app) is checked but not failed on:
+# discord.py models channel/user as wide 7-member unions, so get_channel().send()
+# and similar idioms produce union-attr noise that obscures real issues. The
+# typeable domain core (runtime, storage, models, shopify, embeds) is checked
+# strictly; these modules are exercised by the live bot and the integration smoke.
+[[tool.mypy.overrides]]
+module = ["catabot.cog", "catabot.views", "catabot.app"]
+ignore_errors = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

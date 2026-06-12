@@ -197,22 +197,42 @@ Alerts are toggled per store via `/rst store`. All alert types default to off ex
 
 ```
 catabot-for-discord/
-├── bot.py              # Bot entry point and help pages
-├── requirements.txt    # Python dependencies
+├── bot.py              # Thin entry point — invokes catabot.app.run()
+├── pyproject.toml      # Project metadata, pinned deps, ruff/mypy/pytest config
+├── requirements.txt    # Runtime dependencies (used by start scripts)
 ├── config.toml         # Version and default poll interval
 ├── .env                # Secret credentials (not committed)
-├── watchdog.bat        # Start bot with auto-restart watchdog
-├── stop.bat            # Stop the bot
-├── cogs/
-│   └── restock.py      # All monitoring logic and commands
+├── catabot/            # Application package
+│   ├── runtime.py      #   Paths, AEST timezone, non-blocking rotating logging
+│   ├── storage.py      #   JSON persistence (config, state, guild state, caches)
+│   ├── shopify.py      #   curl_cffi client, pagination, discovery, URL helpers
+│   ├── models.py       #   SearchResult, size normalization, subscription matching
+│   ├── embeds.py       #   Alert and listing embed builders
+│   ├── views.py        #   discord.ui interactive components
+│   ├── cog.py          #   RestockCog — poll loop and all slash commands
+│   └── app.py          #   Bot subclass, help UI, restart handling, run()
+├── tests/              # pytest suite for the typeable core
 ├── data/               # Runtime state (local, not committed)
 │   ├── bot_state.json
 │   ├── stock_state.json
 │   ├── products_cache.json
-│   └── {guild_id}/
-│       └── state.json
+│   └── {guild_id}/state.json
+├── .github/workflows/  # CI: ruff + mypy + pytest
 └── scripts/
-    ├── watchdog.ps1         # PowerShell watchdog (launched by watchdog.bat)
-    ├── apply-tcp-tuning.ps1 # One-time Windows TCP registry fix
-    └── check_pagination.py  # Diagnostic — test Shopify pagination for a store URL
+    ├── watchdog.sh / watchdog.ps1     # Auto-restart supervisor (Linux / Windows)
+    ├── install-service.sh             # Install the systemd service (Linux)
+    ├── apply-sysctl-tuning.sh         # One-time Linux socket tuning
+    └── apply-tcp-tuning.ps1           # One-time Windows TCP registry fix
 ```
+
+## Development
+
+```bash
+pip install -e ".[dev]"   # install with dev tools
+ruff check catabot tests  # lint
+ruff format catabot tests # format
+mypy catabot              # type-check
+pytest                    # run tests
+```
+
+CI runs all four on every push.
